@@ -74,6 +74,8 @@ class DatasetRegistry:
                     FOREIGN KEY(dataset_id) REFERENCES datasets(dataset_id),
                     FOREIGN KEY(version_id) REFERENCES dataset_versions(version_id)
                 );
+                CREATE INDEX IF NOT EXISTS idx_dataset_versions_refreshed ON dataset_versions(last_refreshed_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_dataset_versions_filters ON dataset_versions(provider, symbol, validation_json);
                 """
             )
 
@@ -107,13 +109,33 @@ class DatasetRegistry:
             raise DatasetNotFoundError(f"Dataset not found: {dataset_id}")
         return [self._version_from_row(row) for row in rows]
 
-    def list_datasets(self, limit: int = 50, offset: int = 0) -> tuple[list[DatasetVersion], int]:
+    def list_datasets(self, limit: int = 50, offset: int = 0, *, provider: str | None = None, symbol: str | None = None, status: str | None = None, start_date: str | None = None, end_date: str | None = None) -> tuple[list[DatasetVersion], int]:
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if provider:
+            clauses.append("version.provider = ?")
+            parameters.append(provider)
+        if symbol:
+            clauses.append("version.symbol = ?")
+            parameters.append(symbol)
+        if status:
+            clauses.append("json_extract(version.validation_json, '$.status') = ?")
+            parameters.append(status)
+        if start_date:
+            clauses.append("version.end_date >= ?")
+            parameters.append(start_date)
+        if end_date:
+            clauses.append("version.start_date <= ?")
+            parameters.append(end_date)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.database.connect() as connection:
-            total = int(connection.execute("SELECT COUNT(*) AS count FROM datasets").fetchone()["count"])
+            total = int(connection.execute(
+                f"SELECT COUNT(*) AS count FROM datasets AS dataset JOIN dataset_versions AS version ON version.version_id = dataset.current_version_id{where}", parameters
+            ).fetchone()["count"])
             rows = connection.execute(
                 """SELECT version.* FROM datasets AS dataset JOIN dataset_versions AS version
-                   ON version.version_id = dataset.current_version_id ORDER BY version.last_refreshed_at DESC LIMIT ? OFFSET ?""",
-                (limit, offset),
+                   ON version.version_id = dataset.current_version_id""" + where + " ORDER BY version.last_refreshed_at DESC LIMIT ? OFFSET ?",
+                [*parameters, limit, offset],
             ).fetchall()
         return [self._version_from_row(row) for row in rows], total
 
@@ -210,10 +232,19 @@ class DatasetRegistry:
         warnings = ("MIXED_ADJUSTMENT_MODES",) if len(adjustment_modes) > 1 else ()
         return DatasetCollection(collection["collection_id"], collection["name"], collection["description"], tuple(members), collection["created_at"], warnings)
 
-    def list_collections(self) -> list[DatasetCollection]:
+    def list_collections(self, limit: int | None = None, offset: int = 0) -> list[DatasetCollection]:
         with self.database.connect() as connection:
-            rows = connection.execute("SELECT collection_id FROM dataset_collections ORDER BY name").fetchall()
+            query = "SELECT collection_id FROM dataset_collections ORDER BY name"
+            values: tuple[int, ...] = ()
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                values = (limit, offset)
+            rows = connection.execute(query, values).fetchall()
         return [self.get_collection(row["collection_id"]) for row in rows]
+
+    def collection_count(self) -> int:
+        with self.database.connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) AS count FROM dataset_collections").fetchone()["count"])
 
     @staticmethod
     def _version_from_row(row: object) -> DatasetVersion:

@@ -1,6 +1,6 @@
 # FinAgent implementation guardrails
 
-This repository is currently at **V0.8: Data & Market Intelligence Layer**.
+This repository is currently at **V0.9: Production Polish**.
 
 - Keep the platform a local historical-data research and simulation tool.
 - Preserve reproducibility, no-look-ahead-bias safeguards, configurable costs, and deterministic tests.
@@ -17,3 +17,4 @@ This repository is currently at **V0.8: Data & Market Intelligence Layer**.
 - Do not add LLMs, reinforcement learning, sentiment analysis, unrestricted self-improvement, Bayesian/evolutionary optimization, code rewriting, or live/paper trading integrations.
 - Do not add real-money execution or commit credentials. `LIVE_TRADING_ENABLED` must remain false.
 - Prefer small, modular, configuration-driven Python components and run relevant pytest tests after changes.
+- Keep V0.9 as a local reliability/usability release: structured API errors, bounded local queries, safe SQLite maintenance, and demo data must not change research or execution behavior.

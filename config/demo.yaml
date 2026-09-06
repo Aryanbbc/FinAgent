@@ -1,0 +1,31 @@
+# Safe, reproducible V0.9 demo configuration. It uses only bundled CSV data.
+application:
+  demo_mode: true
+
+experiment:
+  asset: DEMO_EXAMPLE
+  dataset: data/raw/example_ohlcv.csv
+  starting_capital: 100000.0
+  random_seed: 42
+
+database_path: data/demo/finagent_demo.db
+
+agents:
+  enabled: true
+
+critic:
+  enabled: true
+
+strategy:
+  name: momentum
+  parameters:
+    lookback_window: 5
+    entry_threshold: 0.0
+    exit_threshold: -0.02
+
+backtest:
+  annualization_factor: 252
+  position_fraction: 1.0
+  transaction_costs:
+    percentage_fee: 0.001
+    fixed_fee: 1.0

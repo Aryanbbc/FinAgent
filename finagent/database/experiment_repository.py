@@ -197,6 +197,11 @@ class ExperimentRepository:
         asset: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        regime: str | None = None,
+        status: str | None = None,
+        version: str | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
     ) -> tuple[list[ExperimentRecord], int]:
         """Return filtered experiment records and a total count for paginated local clients."""
         clauses: list[str] = []
@@ -217,11 +222,34 @@ class ExperimentRepository:
         if end_date:
             clauses.append("start_date <= ?")
             parameters.append(end_date)
+        if regime:
+            clauses.append("EXISTS (SELECT 1 FROM regime_observations AS regime_filter WHERE regime_filter.experiment_id = experiments.experiment_id AND regime_filter.regime = ?)")
+            parameters.append(regime)
+        if status == "validated":
+            clauses.append("EXISTS (SELECT 1 FROM research_validations AS validation_filter WHERE validation_filter.experiment_id = experiments.experiment_id)")
+        elif status == "unvalidated":
+            clauses.append("NOT EXISTS (SELECT 1 FROM research_validations AS validation_filter WHERE validation_filter.experiment_id = experiments.experiment_id)")
+        elif status == "critiqued":
+            clauses.append("EXISTS (SELECT 1 FROM critiques AS critique_filter WHERE critique_filter.experiment_id = experiments.experiment_id)")
+        elif status == "without_critique":
+            clauses.append("NOT EXISTS (SELECT 1 FROM critiques AS critique_filter WHERE critique_filter.experiment_id = experiments.experiment_id)")
+        if version:
+            clauses.append("configuration_json LIKE ?")
+            parameters.append(f"%{version}%")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        sort_columns = {
+            "created_at": "created_at",
+            "total_return": "json_extract(results_json, '$.metrics.total_return')",
+            "sharpe_ratio": "json_extract(results_json, '$.metrics.sharpe_ratio')",
+            "maximum_drawdown": "json_extract(results_json, '$.metrics.maximum_drawdown')",
+            "start_date": "start_date",
+        }
+        order_column = sort_columns.get(sort_by, "created_at")
+        direction = "ASC" if sort_order.lower() == "asc" else "DESC"
         with self.database.connect() as connection:
             total = connection.execute(f"SELECT COUNT(*) AS count FROM experiments{where}", parameters).fetchone()["count"]
             rows = connection.execute(
-                f"SELECT * FROM experiments{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
+                f"SELECT * FROM experiments{where} ORDER BY {order_column} {direction}, experiment_id DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
             ).fetchall()
         return [self._to_record(row) for row in rows], int(total)
 
@@ -267,6 +295,24 @@ class ExperimentRepository:
             decisions["strategy_reason_codes"] = decisions.pop("strategy_reason_codes_json").map(json.loads)
             decisions["risk_approved"] = decisions["risk_approved"].astype(bool)
         return decisions
+
+    def list_agent_decisions(self, experiment_id: str, limit: int = 100, offset: int = 0) -> tuple[pd.DataFrame, int]:
+        """Return a bounded page of decision history without loading all rows for API clients."""
+        with self.database.connect() as connection:
+            total = int(connection.execute("SELECT COUNT(*) AS count FROM agent_decisions WHERE experiment_id = ?", (experiment_id,)).fetchone()["count"])
+            decisions = pd.read_sql_query(
+                "SELECT timestamp, technical_trend, technical_momentum, technical_volatility, technical_rsi, "
+                "technical_signal_strength, technical_confidence, regime, regime_confidence, selected_strategy, "
+                "action, execution_action, proposal_confidence, requested_position_size, strategy_reason_codes_json, "
+                "risk_approved, adjusted_position_size, risk_reason_code FROM agent_decisions WHERE experiment_id = ? "
+                "ORDER BY id LIMIT ? OFFSET ?",
+                connection,
+                params=(experiment_id, limit, offset),
+            )
+        if not decisions.empty:
+            decisions["strategy_reason_codes"] = decisions.pop("strategy_reason_codes_json").map(json.loads)
+            decisions["risk_approved"] = decisions["risk_approved"].astype(bool)
+        return decisions, total
 
     def update_experiment_results(self, experiment_id: str, results: Mapping[str, Any]) -> None:
         """Attach post-experiment V0.4 output to an already persisted experiment."""
@@ -601,11 +647,26 @@ class ExperimentRepository:
             row = connection.execute("SELECT * FROM candidate_evaluations ORDER BY created_at DESC LIMIT 1").fetchone()
         return self._decision_from_row(row) if row else None
 
-    def list_candidate_evaluations(self, limit: int = 20, offset: int = 0) -> tuple[list[PromotionDecision], int]:
+    def list_candidate_evaluations(self, limit: int = 20, offset: int = 0, *, status: str | None = None, version: str | None = None, start_date: str | None = None, end_date: str | None = None) -> tuple[list[PromotionDecision], int]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            parameters.append(status)
+        if version:
+            clauses.append("parent_version_id = ?")
+            parameters.append(version)
+        if start_date:
+            clauses.append("created_at >= ?")
+            parameters.append(start_date)
+        if end_date:
+            clauses.append("created_at <= ?")
+            parameters.append(f"{end_date}T23:59:59")
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.database.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) AS count FROM candidate_evaluations").fetchone()["count"]
+            total = connection.execute(f"SELECT COUNT(*) AS count FROM candidate_evaluations{where}", parameters).fetchone()["count"]
             rows = connection.execute(
-                "SELECT * FROM candidate_evaluations ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)
+                f"SELECT * FROM candidate_evaluations{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
             ).fetchall()
         return [self._decision_from_row(row) for row in rows], int(total)
 
@@ -756,17 +817,38 @@ class ExperimentRepository:
             row = connection.execute(query, parameters).fetchone()
         return ResearchValidationResult.from_dict(json.loads(row["validation_json"])) if row else None
 
-    def list_research_validations(self, limit: int = 20, offset: int = 0) -> tuple[list[ResearchValidationResult], int]:
+    def list_research_validations(self, limit: int = 20, offset: int = 0, *, asset: str | None = None, status: str | None = None, start_date: str | None = None, end_date: str | None = None) -> tuple[list[ResearchValidationResult], int]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if asset:
+            clauses.append("EXISTS (SELECT 1 FROM research_validation_assets AS asset_filter WHERE asset_filter.validation_id = research_validations.validation_id AND asset_filter.asset = ?)")
+            parameters.append(asset)
+        if status == "passed":
+            clauses.append("json_extract(validation_json, '$.leakage.passed') = 1")
+        elif status == "failed":
+            clauses.append("json_extract(validation_json, '$.leakage.passed') = 0")
+        if start_date:
+            clauses.append("created_at >= ?")
+            parameters.append(start_date)
+        if end_date:
+            clauses.append("created_at <= ?")
+            parameters.append(f"{end_date}T23:59:59")
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.database.connect() as connection:
-            total = connection.execute("SELECT COUNT(*) AS count FROM research_validations").fetchone()["count"]
+            total = connection.execute(f"SELECT COUNT(*) AS count FROM research_validations{where}", parameters).fetchone()["count"]
             rows = connection.execute(
-                "SELECT validation_json FROM research_validations ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)
+                f"SELECT validation_json FROM research_validations{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
             ).fetchall()
         return [ResearchValidationResult.from_dict(json.loads(row["validation_json"])) for row in rows], int(total)
 
     def count_configuration_versions(self) -> int:
         with self.database.connect() as connection:
             return int(connection.execute("SELECT COUNT(*) AS count FROM configuration_versions").fetchone()["count"])
+
+    def latest_validation_created_at(self) -> str | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT created_at FROM research_validations ORDER BY created_at DESC LIMIT 1").fetchone()
+        return str(row["created_at"]) if row else None
 
     @staticmethod
     def _memory_query_result(row: Any) -> MemoryQueryResult:

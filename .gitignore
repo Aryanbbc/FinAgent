@@ -10,6 +10,9 @@ htmlcov/
 data/finagent.db
 data/*.db
 data/cache/
+data/demo/
+backups/
+exports/
 *.sqlite3
 frontend/node_modules/
 frontend/.next/

@@ -10,6 +10,6 @@ test("central API client returns parsed typed payloads", async () => {
 
 test("central API client exposes useful API errors", async () => {
   const original = globalThis.fetch;
-  globalThis.fetch = async () => new Response(JSON.stringify({ detail: { message: "missing" } }), { status: 404, headers: { "Content-Type": "application/json" } });
-  try { await assert.rejects(api.health(), (error: unknown) => error instanceof ApiError && error.status === 404); } finally { globalThis.fetch = original; }
+  globalThis.fetch = async () => new Response(JSON.stringify({ error_code: "NOT_FOUND", message: "missing", request_id: "req-1" }), { status: 404, headers: { "Content-Type": "application/json" } });
+  try { await assert.rejects(api.health(), (error: unknown) => error instanceof ApiError && error.status === 404 && error.code === "NOT_FOUND" && error.requestId === "req-1"); } finally { globalThis.fetch = original; }
 });

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from datetime import UTC, datetime
+from typing import Any
 
 
 class Database:
@@ -13,15 +15,19 @@ class Database:
         self.path = Path(path)
 
     def connect(self) -> sqlite3.Connection:
+        """Open a bounded local connection with foreign keys and lock waiting enabled."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=5.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
         return connection
 
     def initialize(self) -> None:
-        """Create V0.1–V0.6 tables idempotently, including validation and reproducibility records."""
+        """Create all local research tables and safe performance indexes idempotently."""
         with self.connect() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS experiments (
@@ -277,5 +283,62 @@ class Database:
                     FOREIGN KEY (validation_id) REFERENCES research_validations(validation_id) ON DELETE CASCADE,
                     UNIQUE (validation_id, asset, benchmark)
                 );
+
+                CREATE TABLE IF NOT EXISTS demo_seed_records (
+                    seed_name TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_experiments_created_at ON experiments(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_experiments_strategy_asset ON experiments(strategy, asset);
+                CREATE INDEX IF NOT EXISTS idx_regime_observations_experiment_regime ON regime_observations(experiment_id, regime);
+                CREATE INDEX IF NOT EXISTS idx_agent_decisions_experiment_timestamp ON agent_decisions(experiment_id, timestamp);
+                CREATE INDEX IF NOT EXISTS idx_candidate_evaluations_created ON candidate_evaluations(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_validations_created ON research_validations(created_at DESC);
                 """
             )
+
+    def health_check(self) -> dict[str, Any]:
+        """Return non-destructive SQLite status and an integrity-check result."""
+        try:
+            self.initialize()
+            with self.connect() as connection:
+                integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+                quick = connection.execute("PRAGMA quick_check").fetchone()[0]
+            return {
+                "status": "ok" if integrity == "ok" and quick == "ok" else "degraded",
+                "integrity_check": integrity,
+                "quick_check": quick,
+                "path": str(self.path),
+                "size_bytes": self.path.stat().st_size if self.path.exists() else 0,
+            }
+        except sqlite3.Error as error:
+            return {"status": "unavailable", "message": str(error), "path": str(self.path), "size_bytes": 0}
+
+    def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
+        """Create a consistent SQLite backup without deleting the source database."""
+        target = Path(destination)
+        if target.resolve() == self.path.resolve():
+            raise ValueError("backup destination must differ from the source database")
+        if target.exists() and not overwrite:
+            raise FileExistsError(f"backup already exists: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as source, sqlite3.connect(target) as backup:
+            source.backup(backup)
+        return target
+
+    def save_demo_seed(self, seed_name: str, version: str, metadata_json: str) -> None:
+        """Mark a populated sample database so seed commands remain idempotent."""
+        self.initialize()
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO demo_seed_records (seed_name, created_at, version, metadata_json) VALUES (?, ?, ?, ?)",
+                (seed_name, datetime.now(UTC).isoformat(), version, metadata_json),
+            )
+
+    def demo_seed(self, seed_name: str) -> sqlite3.Row | None:
+        self.initialize()
+        with self.connect() as connection:
+            return connection.execute("SELECT * FROM demo_seed_records WHERE seed_name = ?", (seed_name,)).fetchone()

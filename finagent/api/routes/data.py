@@ -27,8 +27,8 @@ def providers(service: ResearchService = Depends(get_service)) -> list[dict[str,
 
 
 @router.get("/datasets", response_model=DatasetListResponse)
-def datasets(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), service: ResearchService = Depends(get_service)) -> dict[str, object]:
-    items, total = service.data_datasets(limit, offset)
+def datasets(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), provider: str | None = None, symbol: str | None = None, status: str | None = Query(default=None, pattern=r"^(valid|warning|invalid)$"), start_date: str | None = None, end_date: str | None = None, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+    items, total = service.data_datasets(limit, offset, provider=provider, symbol=symbol, status=status, start_date=start_date, end_date=end_date)
     return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 
@@ -48,5 +48,6 @@ def validate(request: DataValidateRequest, service: ResearchService = Depends(ge
 
 
 @router.get("/collections", response_model=CollectionsResponse)
-def collections(service: ResearchService = Depends(get_service)) -> dict[str, object]:
-    return {"items": service.data_collections()}
+def collections(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0), service: ResearchService = Depends(get_service)) -> dict[str, object]:
+    items, total = service.data_collections(limit, offset)
+    return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}

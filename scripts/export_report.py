@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from finagent.database.db import Database  # noqa: E402
 from finagent.database.experiment_repository import ExperimentRepository  # noqa: E402
 from finagent.validation.report import ResearchReportExporter  # noqa: E402
+from finagent.utils.logging import configure_logging, log_event  # noqa: E402
 
 
 def main() -> int:
@@ -29,6 +30,7 @@ def main() -> int:
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_path
     output = ResearchReportExporter(ExperimentRepository(Database(database_path))).export(arguments.experiment, output_path)
+    log_event(configure_logging(), "REPORT_EXPORTED", artifact_id=arguments.experiment, workflow="report_export")
     print(f"Research report exported: {output}")
     return 0
 

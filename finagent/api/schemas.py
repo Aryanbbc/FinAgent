@@ -1,4 +1,4 @@
-"""Stable Pydantic response and request models for the local V0.8 API."""
+"""Stable Pydantic response and request models for the local V0.9 API."""
 
 from __future__ import annotations
 
@@ -12,9 +12,23 @@ class APIModel(BaseModel):
 
 
 class HealthResponse(APIModel):
-    status: Literal["ok"]
+    status: Literal["ok", "degraded"]
     service: str
     version: str
+    database_status: str = "ok"
+    dataset_registry_status: str = "ok"
+    latest_experiment_at: str | None = None
+    latest_validation_at: str | None = None
+
+
+class ErrorResponse(APIModel):
+    error_code: str
+    message: str
+    details: dict[str, Any] | list[dict[str, Any]] | None = None
+    timestamp: str
+    request_id: str | None = None
+    # Retained only as a V0.7/V0.8 compatibility bridge for existing local clients.
+    detail: dict[str, str] | None = None
 
 
 class PaginationMeta(APIModel):
@@ -101,6 +115,7 @@ class AgentDecision(APIModel):
 class AgentDecisionsResponse(APIModel):
     experiment_id: str
     items: list[AgentDecision]
+    pagination: PaginationMeta
 
 
 class CritiqueResponse(APIModel):
@@ -185,6 +200,7 @@ class ReportResponse(APIModel):
 class ConfigResponse(APIModel):
     safe_defaults: dict[str, Any]
     capabilities: dict[str, bool]
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SystemResponse(APIModel):
@@ -200,6 +216,14 @@ class SystemResponse(APIModel):
     latest_dataset_refresh: str | None = None
     data_providers: list[dict[str, Any]] = Field(default_factory=list)
     data_quality_warnings: int = 0
+    database_status: str = "unknown"
+    database_integrity: str | None = None
+    latest_experiment_at: str | None = None
+    latest_validation_at: str | None = None
+    last_successful_run: str | None = None
+    frontend_version: str | None = None
+    enabled_modules: list[str] = Field(default_factory=list)
+    demo_mode: bool = False
 
 
 class DataProviderResponse(APIModel):
@@ -274,6 +298,7 @@ class DatasetCollectionResponse(APIModel):
 
 class CollectionsResponse(APIModel):
     items: list[DatasetCollectionResponse]
+    pagination: PaginationMeta
 
 
 class RunRequest(APIModel):

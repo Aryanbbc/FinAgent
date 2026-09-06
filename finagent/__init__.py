@@ -1,3 +1,3 @@
-"""FinAgent V0.8 local quantitative research engine, data layer, and professional workspace."""
+"""FinAgent V0.9 local quantitative research engine and professional workspace."""
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"

@@ -8,8 +8,8 @@ router = APIRouter(prefix="/api/improvements", tags=["Self-Improvement"])
 
 
 @router.get("", response_model=ImprovementsResponse)
-def improvements(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), service: ResearchService = Depends(get_service)) -> dict[str, object]:
-    items, total = service.improvements(limit, offset)
+def improvements(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), status: str | None = Query(default=None, pattern=r"^(BASELINE|PROMOTED|REJECTED)$"), version: str | None = None, start_date: str | None = None, end_date: str | None = None, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+    items, total = service.improvements(limit, offset, status=status, version=version, start_date=start_date, end_date=end_date)
     return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 

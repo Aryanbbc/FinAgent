@@ -1,0 +1,30 @@
+# Demo-only deterministic V0.5 evaluation; it cannot alter a trading system.
+source_experiment_config: config/demo.yaml
+database_path: data/demo/finagent_demo.db
+
+learning:
+  enabled: true
+  memory_experiment_id: null
+  search:
+    mode: neighborhood
+    max_candidates: 2
+    boundaries:
+      momentum_window:
+        min: 4
+        max: 6
+        step: 1
+      risk_confidence_threshold:
+        min: 0.10
+        max: 0.20
+        step: 0.05
+  walk_forward:
+    train_size: 15
+    test_size: 10
+    step_size: 10
+    min_windows: 2
+  promotion_gate:
+    minimum_sharpe_improvement: 0.05
+    maximum_drawdown: 0.30
+    minimum_window_pass_rate: 0.50
+    minimum_trades: 0
+    maximum_turnover: 10.0

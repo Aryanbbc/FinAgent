@@ -18,6 +18,7 @@ from finagent.backtesting.costs import TransactionCostModel
 from finagent.backtesting.engine import BacktestEngine
 from finagent.critique.critic_agent import CriticAgent, CriticAgentConfig
 from finagent.critique.models import CriticAgentInput, TradeStatistics, TransactionCostAssumptions
+from finagent.configuration import validate_research_configuration
 from finagent.data.loader import CSVDataLoader
 from finagent.data.registry import DatasetRegistry
 from finagent.database.db import Database
@@ -52,7 +53,9 @@ def load_configuration(config_path: str | Path, project_root: str | Path) -> dic
         default_config = yaml.safe_load(handle) or {}
     with requested_path.open(encoding="utf-8") as handle:
         experiment_config = yaml.safe_load(handle) or {}
-    return _deep_merge(default_config, experiment_config)
+    merged = _deep_merge(default_config, experiment_config)
+    validate_research_configuration(merged)
+    return merged
 
 
 def _curve_records(curve: pd.DataFrame, value_column: str) -> list[dict[str, object]]:

@@ -8,8 +8,8 @@ router = APIRouter(prefix="/api", tags=["Research Validation"])
 
 
 @router.get("/validation", response_model=ValidationListResponse)
-def validations(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), service: ResearchService = Depends(get_service)) -> dict[str, object]:
-    items, total = service.validations(limit, offset)
+def validations(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), asset: str | None = None, status: str | None = Query(default=None, pattern=r"^(passed|failed)$"), start_date: str | None = None, end_date: str | None = None, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+    items, total = service.validations(limit, offset, asset=asset, status=status, start_date=start_date, end_date=end_date)
     return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 
