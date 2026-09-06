@@ -1,4 +1,4 @@
-"""Minimal Streamlit dashboard for persisted FinAgent V0.2 experiments."""
+"""Minimal Streamlit dashboard for persisted FinAgent V0.3 experiments."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def _format_percentage(value: object) -> str:
 
 
 def main() -> None:
-    st.set_page_config(page_title="FinAgent V0.2", layout="wide")
-    st.title("FinAgent V0.2")
+    st.set_page_config(page_title="FinAgent V0.3", layout="wide")
+    st.title("FinAgent V0.3")
     st.caption("Historical quantitative research and simulation — not live trading.")
     database_path = st.sidebar.text_input("SQLite database", value=str(PROJECT_ROOT / "data" / "finagent.db"))
     repository = ExperimentRepository(Database(database_path))
@@ -61,6 +61,19 @@ def main() -> None:
             st.bar_chart(counts, use_container_width=True)
             with st.expander("Regime observation history"):
                 st.dataframe(regime_history, use_container_width=True, hide_index=True)
+
+    agents = experiment.results.get("agents", {})
+    if agents.get("enabled") and agents.get("latest"):
+        decision = agents["latest"]
+        st.subheader("Agent Decision Flow")
+        agent_columns = st.columns(4)
+        agent_columns[0].metric("Technical trend", decision["technical"]["trend"].title())
+        agent_columns[1].metric("Selected strategy", decision["proposal"]["selected_strategy"])
+        agent_columns[2].metric("Execution action", decision["execution_action"].title())
+        agent_columns[3].metric("Risk decision", decision["risk"]["reason_code"])
+        with st.expander("Agent decision history"):
+            agent_history = repository.get_agent_decisions(experiment.experiment_id)
+            st.dataframe(agent_history, use_container_width=True, hide_index=True)
 
     st.subheader("Equity Curve")
     strategy_curve = pd.DataFrame(experiment.results["equity_curve"])

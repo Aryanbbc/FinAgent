@@ -27,6 +27,10 @@ features:
 regime:
   enabled: true
 
+# V0.3 example: enable the deterministic technical → regime → strategy → risk flow.
+agents:
+  enabled: true
+
 strategy:
   name: momentum
   parameters:

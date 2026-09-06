@@ -1,4 +1,4 @@
-"""Configuration-driven orchestration for a complete V0.1 experiment."""
+"""Configuration-driven orchestration for a complete V0.3 experiment."""
 
 from __future__ import annotations
 
@@ -12,6 +12,11 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from finagent.agents.decision_system import AgentDecisionSystem
+from finagent.agents.regime_agent import RegimeAgent
+from finagent.agents.risk_agent import RiskAgent, RiskAgentConfig
+from finagent.agents.strategy_agent import StrategyAgent, StrategyAgentConfig
+from finagent.agents.technical_agent import TechnicalAgent, TechnicalAgentConfig
 from finagent.backtesting.costs import TransactionCostModel
 from finagent.backtesting.engine import BacktestEngine
 from finagent.data.loader import CSVDataLoader
@@ -70,12 +75,75 @@ def _regime_summary(regime_history: pd.DataFrame) -> dict[str, Any]:
     return {"enabled": True, "latest": latest, "distribution": distribution, "observations": int(len(regime_history))}
 
 
+def _agent_summary(agent_decisions: pd.DataFrame, enabled: bool) -> dict[str, Any]:
+    """Build the nested result representation of the latest persisted agent flow."""
+    if not enabled or agent_decisions.empty:
+        return {"enabled": enabled, "observations": 0, "latest": None}
+    latest = agent_decisions.iloc[-1]
+    return {
+        "enabled": True,
+        "observations": int(len(agent_decisions)),
+        "latest": {
+            "timestamp": str(latest["timestamp"]),
+            "technical": {
+                "trend": latest["technical_trend"],
+                "momentum": latest["technical_momentum"],
+                "volatility": latest["technical_volatility"],
+                "rsi": latest["technical_rsi"],
+                "signal_strength": float(latest["technical_signal_strength"]),
+                "confidence": float(latest["technical_confidence"]),
+            },
+            "regime": {"regime": latest["regime"], "confidence": float(latest["regime_confidence"])},
+            "proposal": {
+                "selected_strategy": latest["selected_strategy"],
+                "action": latest["action"],
+                "confidence": float(latest["proposal_confidence"]),
+                "requested_position_size": float(latest["requested_position_size"]),
+                "reason_codes": list(latest["strategy_reason_codes"]),
+            },
+            "risk": {
+                "approved": bool(latest["risk_approved"]),
+                "adjusted_position_size": float(latest["adjusted_position_size"]),
+                "reason_code": latest["risk_reason_code"],
+            },
+            "execution_action": latest["execution_action"],
+        },
+    }
+
+
+def _build_agent_decision_system(
+    configuration: Mapping[str, Any], detector: RuleBasedRegimeDetector, logger: logging.Logger | None
+) -> AgentDecisionSystem:
+    """Create the optional V0.3 agent layer from reproducible configuration."""
+    agent_config = configuration.get("agents", {})
+    technical_config = TechnicalAgentConfig(**dict(agent_config.get("technical", {})))
+    risk_config = RiskAgentConfig(**dict(agent_config.get("risk", {})))
+    strategy_config = dict(agent_config.get("strategy", {}))
+    available_strategy_config = dict(strategy_config.pop("available_strategies", {}))
+    if not available_strategy_config:
+        configured_strategy = configuration["strategy"]
+        available_strategy_config = {configured_strategy["name"]: configured_strategy.get("parameters", {})}
+    available_strategies = {
+        name: create_strategy(name, parameters) for name, parameters in available_strategy_config.items()
+    }
+    strategy_agent_config = StrategyAgentConfig(
+        regime_strategy_map=dict(strategy_config.get("regime_strategy_map", {})) or StrategyAgentConfig().regime_strategy_map
+    )
+    return AgentDecisionSystem(
+        technical_agent=TechnicalAgent(technical_config, logger=logger),
+        regime_agent=RegimeAgent(detector, logger=logger),
+        strategy_agent=StrategyAgent(available_strategies, strategy_agent_config, logger=logger),
+        risk_agent=RiskAgent(risk_config, logger=logger),
+        logger=logger,
+    )
+
+
 def run_experiment(
     config_path: str | Path,
     project_root: str | Path,
     logger: logging.Logger | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Run, evaluate, persist, and return a V0.2 historical-data experiment."""
+    """Run, evaluate, persist, and return a V0.3 historical-data experiment."""
     root = Path(project_root)
     configuration = load_configuration(config_path, root)
     experiment_config = configuration["experiment"]
@@ -102,11 +170,11 @@ def run_experiment(
 
     annualization_factor = int(backtest_config.get("annualization_factor", 252))
     regime_config = configuration.get("regime", {})
+    regime_detector = RuleBasedRegimeDetector(RuleBasedRegimeDetectorConfig.from_mapping(regime_config, annualization_factor))
     regime_history: pd.DataFrame | None = None
     regime_results: dict[str, Any] = {"enabled": False, "latest": None, "distribution": {}, "observations": 0}
     if regime_config.get("enabled", True):
-        detector = RuleBasedRegimeDetector(RuleBasedRegimeDetectorConfig.from_mapping(regime_config, annualization_factor))
-        regime_history = detector.detect_history(featured_data)
+        regime_history = regime_detector.detect_history(featured_data)
         regime_results = _regime_summary(regime_history)
         if logger:
             logger.info(
@@ -119,12 +187,19 @@ def run_experiment(
     strategy = create_strategy(strategy_config["name"], strategy_config.get("parameters"))
     costs = TransactionCostModel(**backtest_config.get("transaction_costs", {}))
     starting_capital = float(experiment_config["starting_capital"])
+    agents_enabled = bool(configuration.get("agents", {}).get("enabled", False))
+    if agents_enabled and not regime_config.get("enabled", True):
+        raise ValueError("V0.3 agent mode requires regime.enabled to remain true")
+    agent_decision_system = _build_agent_decision_system(configuration, regime_detector, logger) if agents_enabled else None
     result = BacktestEngine(
         strategy=strategy,
         starting_capital=starting_capital,
         transaction_costs=costs,
         position_fraction=float(backtest_config.get("position_fraction", 1.0)),
+        agent_decision_system=agent_decision_system,
     ).run(featured_data)
+    if logger and agents_enabled:
+        logger.info("event=AGENT_DECISIONS_GENERATED observations=%s", len(result.agent_decisions))
     if logger:
         logger.info("event=EXPERIMENT_COMPLETED trades=%s", len(result.trades))
 
@@ -133,11 +208,13 @@ def run_experiment(
     benchmark_metrics = calculate_metrics(
         benchmark_curve.rename(columns={"benchmark_equity": "equity"}), None, annualization_factor, initial_equity=starting_capital
     )
+    agent_results = _agent_summary(result.agent_decisions, agents_enabled)
 
     results: dict[str, Any] = {
         "metrics": metrics,
         "benchmark_metrics": benchmark_metrics,
         "regime": regime_results,
+        "agents": agent_results,
         "equity_curve": _curve_records(result.equity_curve, "equity"),
         "benchmark_curve": _curve_records(benchmark_curve, "benchmark_equity"),
         "final_portfolio": {
@@ -162,6 +239,7 @@ def run_experiment(
         metrics=metrics,
         trades=result.trades,
         regime_observations=regime_history,
+        agent_decisions=result.agent_decisions,
     )
     if logger:
         logger.info("event=EXPERIMENT_SAVED experiment_id=%s", experiment_id)

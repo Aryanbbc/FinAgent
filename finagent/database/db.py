@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class Database:
-    """Creates and connects to the local V0.1/V0.2 SQLite schema."""
+    """Creates and connects to the local V0.1–V0.3 SQLite schema."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -20,7 +20,7 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        """Create V0.1/V0.2 tables idempotently, including the regime-observation migration."""
+        """Create V0.1–V0.3 tables idempotently, including regime and agent migrations."""
         with self.connect() as connection:
             connection.executescript(
                 """
@@ -72,6 +72,31 @@ class Database:
                     moving_average_slope REAL,
                     momentum REAL,
                     drawdown REAL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE,
+                    UNIQUE (experiment_id, timestamp)
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    experiment_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    technical_trend TEXT NOT NULL,
+                    technical_momentum TEXT NOT NULL,
+                    technical_volatility TEXT NOT NULL,
+                    technical_rsi TEXT NOT NULL,
+                    technical_signal_strength REAL NOT NULL,
+                    technical_confidence REAL NOT NULL,
+                    regime TEXT NOT NULL,
+                    regime_confidence REAL NOT NULL,
+                    selected_strategy TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    execution_action TEXT NOT NULL,
+                    proposal_confidence REAL NOT NULL,
+                    requested_position_size REAL NOT NULL,
+                    strategy_reason_codes_json TEXT NOT NULL,
+                    risk_approved INTEGER NOT NULL,
+                    adjusted_position_size REAL NOT NULL,
+                    risk_reason_code TEXT NOT NULL,
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE,
                     UNIQUE (experiment_id, timestamp)
                 );

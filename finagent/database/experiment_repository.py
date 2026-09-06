@@ -43,6 +43,7 @@ class ExperimentRepository:
         metrics: Mapping[str, float | int | None],
         trades: pd.DataFrame,
         regime_observations: pd.DataFrame | None = None,
+        agent_decisions: pd.DataFrame | None = None,
     ) -> str:
         """Atomically save a complete reproducible experiment and return its ID."""
         experiment_id = self.next_experiment_id()
@@ -121,6 +122,42 @@ class ExperimentRepository:
                     """,
                     observation_rows,
                 )
+            if agent_decisions is not None and not agent_decisions.empty:
+                decision_rows = [
+                    (
+                        experiment_id,
+                        str(decision["timestamp"]),
+                        decision["technical_trend"],
+                        decision["technical_momentum"],
+                        decision["technical_volatility"],
+                        decision["technical_rsi"],
+                        float(decision["technical_signal_strength"]),
+                        float(decision["technical_confidence"]),
+                        decision["regime"],
+                        float(decision["regime_confidence"]),
+                        decision["selected_strategy"],
+                        decision["action"],
+                        decision["execution_action"],
+                        float(decision["proposal_confidence"]),
+                        float(decision["requested_position_size"]),
+                        json.dumps(decision["strategy_reason_codes"]),
+                        int(bool(decision["risk_approved"])),
+                        float(decision["adjusted_position_size"]),
+                        decision["risk_reason_code"],
+                    )
+                    for decision in agent_decisions.to_dict(orient="records")
+                ]
+                connection.executemany(
+                    """
+                    INSERT INTO agent_decisions (
+                        experiment_id, timestamp, technical_trend, technical_momentum, technical_volatility,
+                        technical_rsi, technical_signal_strength, technical_confidence, regime, regime_confidence,
+                        selected_strategy, action, execution_action, proposal_confidence, requested_position_size,
+                        strategy_reason_codes_json, risk_approved, adjusted_position_size, risk_reason_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    decision_rows,
+                )
         return experiment_id
 
     @staticmethod
@@ -158,6 +195,23 @@ class ExperimentRepository:
                 connection,
                 params=(experiment_id,),
             )
+
+    def get_agent_decisions(self, experiment_id: str) -> pd.DataFrame:
+        """Return persisted V0.3 agent decision chains in chronological order."""
+        with self.database.connect() as connection:
+            decisions = pd.read_sql_query(
+                "SELECT timestamp, technical_trend, technical_momentum, technical_volatility, technical_rsi, "
+                "technical_signal_strength, technical_confidence, regime, regime_confidence, selected_strategy, "
+                "action, execution_action, proposal_confidence, requested_position_size, strategy_reason_codes_json, "
+                "risk_approved, adjusted_position_size, risk_reason_code "
+                "FROM agent_decisions WHERE experiment_id = ? ORDER BY id",
+                connection,
+                params=(experiment_id,),
+            )
+        if not decisions.empty:
+            decisions["strategy_reason_codes"] = decisions.pop("strategy_reason_codes_json").map(json.loads)
+            decisions["risk_approved"] = decisions["risk_approved"].astype(bool)
+        return decisions
 
     @staticmethod
     def _to_record(row: Any) -> ExperimentRecord:

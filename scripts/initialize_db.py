@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize the local FinAgent V0.2 SQLite experiment database."""
+"""Initialize the local FinAgent V0.3 SQLite experiment database."""
 
 from __future__ import annotations
 

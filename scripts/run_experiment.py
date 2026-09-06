@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a configured FinAgent V0.2 historical experiment."""
+"""Run a configured FinAgent V0.3 historical experiment."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _decimal(value: Any) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a FinAgent V0.2 experiment")
+    parser = argparse.ArgumentParser(description="Run a FinAgent V0.3 experiment")
     parser.add_argument("--config", default="config/experiments.yaml", help="Path to experiment YAML configuration")
     arguments = parser.parse_args()
 
@@ -37,7 +37,7 @@ def main() -> int:
     dataset_timestamps = results["equity_curve"]
 
     print("\n========================================")
-    print("\n               FINAGENT V0.2\n")
+    print("\n               FINAGENT V0.3\n")
     print("========================================\n")
     print(f"Experiment:         {experiment_id}")
     print(f"Strategy:           {configuration['strategy']['name']}")
@@ -60,6 +60,12 @@ def main() -> int:
         latest_regime = regime["latest"]
         print(f"Latest Regime:      {latest_regime['regime']}")
         print(f"Regime Confidence:  {_percentage(latest_regime['confidence'])}")
+    agents = results.get("agents", {})
+    if agents.get("enabled") and agents.get("latest"):
+        latest_decision = agents["latest"]
+        print(f"Agent Strategy:     {latest_decision['proposal']['selected_strategy']}")
+        print(f"Agent Action:       {latest_decision['execution_action']}")
+        print(f"Risk Decision:      {latest_decision['risk']['reason_code']}")
     print("\n----------------------------------------\n")
     print("EXPERIMENT SAVED SUCCESSFULLY")
     print("\n========================================")

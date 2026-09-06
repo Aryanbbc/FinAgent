@@ -1,6 +1,6 @@
 application:
   name: FinAgent
-  version: "0.2"
+  version: "0.3"
   live_trading_enabled: false
 
 market:
@@ -27,3 +27,41 @@ regime:
     high_volatility_threshold: 0.30
     low_volatility_threshold: 0.10
     stress_drawdown_threshold: -0.12
+
+agents:
+  # Disabled by default so existing V0.1/V0.2 configurations preserve direct strategy execution.
+  enabled: false
+  technical:
+    trend_threshold: 0.003
+    momentum_threshold: 0.005
+    high_volatility_threshold: 0.30
+    low_volatility_threshold: 0.10
+    oversold_rsi: 30.0
+    overbought_rsi: 70.0
+  strategy:
+    available_strategies:
+      moving_average:
+        fast_window: 5
+        slow_window: 20
+      momentum:
+        lookback_window: 5
+        entry_threshold: 0.0
+        exit_threshold: -0.02
+      mean_reversion:
+        lookback_window: 10
+        entry_zscore: -1.0
+        exit_zscore: 0.0
+    regime_strategy_map:
+      bull: momentum
+      bear: moving_average
+      sideways: mean_reversion
+      high_volatility: moving_average
+      low_volatility: mean_reversion
+      stress: moving_average
+  risk:
+    max_position_size: 1.0
+    max_drawdown: 0.20
+    max_volatility: 0.50
+    reduced_volatility_threshold: 0.30
+    reduced_position_size: 0.50
+    minimum_confidence: 0.15
