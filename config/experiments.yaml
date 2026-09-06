@@ -1,0 +1,39 @@
+# Runnable V0.1 example. Paths are resolved relative to the repository root.
+experiment:
+  asset: EXAMPLE
+  dataset: data/raw/example_ohlcv.csv
+  starting_capital: 100000.0
+  random_seed: 42
+
+database_path: data/finagent.db
+
+features:
+  simple_return: true
+  log_return: true
+  rolling_volatility:
+    window: 10
+  sma:
+    window: 5
+  ema:
+    span: 5
+  momentum:
+    window: 5
+  rsi:
+    window: 14
+  rolling_volume_mean:
+    window: 10
+  volume_change: true
+
+strategy:
+  name: momentum
+  parameters:
+    lookback_window: 5
+    entry_threshold: 0.0
+    exit_threshold: -0.02
+
+backtest:
+  annualization_factor: 252
+  position_fraction: 1.0
+  transaction_costs:
+    percentage_fee: 0.001
+    fixed_fee: 1.0

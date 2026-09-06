@@ -1,0 +1,13 @@
+moving_average:
+  fast_window: 5
+  slow_window: 20
+
+momentum:
+  lookback_window: 10
+  entry_threshold: 0.0
+  exit_threshold: 0.0
+
+mean_reversion:
+  lookback_window: 20
+  entry_zscore: -1.5
+  exit_zscore: 0.0

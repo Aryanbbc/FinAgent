@@ -1,0 +1,13 @@
+application:
+  name: FinAgent
+  version: "0.1"
+  live_trading_enabled: false
+
+market:
+  annualization_factor: 252
+
+backtest:
+  transaction_costs:
+    percentage_fee: 0.001
+    fixed_fee: 0.0
+  position_fraction: 1.0
