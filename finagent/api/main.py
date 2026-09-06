@@ -1,4 +1,4 @@
-"""FastAPI application for local FinAgent historical-research artifacts."""
+"""FastAPI application for FinAgent historical-research artifacts."""
 
 from __future__ import annotations
 
@@ -25,9 +25,15 @@ from finagent.utils.logging import configure_logging, log_event
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime = settings or Settings()
     logger = configure_logging()
-    app = FastAPI(title="FinAgent Local Research API", version="0.9.0", description="Local-only historical research, dataset management, and controlled V0.1–V0.8 workflow access.")
+    app = FastAPI(title="FinAgent Research API", version="0.9.0", description="Historical research, dataset management, and controlled V0.1–V0.8 workflow access. No trading execution is available.")
     app.state.research_service = ResearchService(runtime)
-    app.add_middleware(CORSMiddleware, allow_origins=list(runtime.cors_origins), allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(runtime.cors_origins),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     def error_response(request: Request, status_code: int, code: str, message: str, details: object | None = None) -> JSONResponse:
         request_id = getattr(request.state, "request_id", None)

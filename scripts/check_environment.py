@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from finagent.database.db import Database  # noqa: E402
+from finagent.api.settings import Settings  # noqa: E402
 
 
 def _node_version() -> str | None:
@@ -36,6 +37,7 @@ def main() -> int:
     if not database_path.is_absolute():
         database_path = PROJECT_ROOT / database_path
     required_modules = ("numpy", "pandas", "yaml", "fastapi", "uvicorn")
+    runtime = Settings(project_root=PROJECT_ROOT, database_url=f"sqlite:///{database_path}")
     checks: dict[str, object] = {
         "python_version": sys.version.split()[0],
         "python_supported": sys.version_info >= (3, 11),
@@ -43,7 +45,8 @@ def main() -> int:
         "frontend_dependencies": (PROJECT_ROOT / "frontend" / "node_modules").is_dir(),
         "python_dependencies": {name: importlib.util.find_spec(name) is not None for name in required_modules},
         "required_directories": {},
-        "environment": {name: bool(os.getenv(name)) for name in ("DATABASE_URL", "DATA_CACHE_PATH", "NEXT_PUBLIC_FINAGENT_API_URL")},
+        "environment": {name: bool(os.getenv(name)) for name in ("DATABASE_URL", "DATA_CACHE_PATH", "REPORTS_PATH", "FRONTEND_ORIGIN", "FINAGENT_ENV")},
+        "runtime": {"environment": runtime.environment, "host": runtime.host, "port": runtime.port, "cors_origins": runtime.cors_origins},
         "database": Database(database_path).health_check(),
     }
     directories = (PROJECT_ROOT / "data", PROJECT_ROOT / "data" / "cache", PROJECT_ROOT / "reports", PROJECT_ROOT / "experiments")

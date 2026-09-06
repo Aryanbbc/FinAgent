@@ -233,7 +233,7 @@ class ResearchService:
 
     def report_path(self, experiment_id: str) -> Path:
         self._require_experiment(experiment_id)
-        report = self.settings.project_root / "reports" / f"{experiment_id}_research_report.md"
+        report = self.settings.reports_path / f"{experiment_id}_research_report.md"
         if not report.is_file():
             report = self.settings.project_root / "data" / "demo" / "reports" / f"{experiment_id}_research_report.md"
         if not report.is_file():

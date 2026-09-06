@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: finagent-api
+    runtime: python
+    plan: 0.5c-512mb
+    buildCommand: pip install -e ".[api]"
+    startCommand: uvicorn finagent.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: FINAGENT_ENV
+        value: production
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite:////var/data/finagent.db
+      - key: DATA_CACHE_PATH
+        value: /var/data/cache
+      - key: REPORTS_PATH
+        value: /var/data/reports
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+    disk:
+      name: finagent-data
+      mountPath: /var/data
+      sizeGB: 1

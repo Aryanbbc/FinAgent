@@ -10,4 +10,4 @@ router = APIRouter(prefix="/api", tags=["System"])
 
 @router.get("/health", response_model=HealthResponse)
 def health(service: ResearchService = Depends(get_service)) -> dict[str, str | None]:
-    return {"service": "finagent-local-research-api", "version": __version__, **service.health()}
+    return {"service": "finagent-historical-research-api", "version": __version__, **service.health()}

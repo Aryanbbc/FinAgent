@@ -1,6 +1,8 @@
 /* Centralized, typed client for the local FinAgent FastAPI contract. */
 
-export const apiBase = process.env.NEXT_PUBLIC_FINAGENT_API_URL ?? "http://127.0.0.1:8000";
+const configuredApiBase = process.env.NEXT_PUBLIC_FINAGENT_API_URL?.replace(/\/$/, "");
+// Local development remains convenient; production must provide the public API URL at build time.
+export const apiBase = configuredApiBase ?? (process.env.NODE_ENV === "production" ? "" : "http://127.0.0.1:8000");
 
 export type MetricMap = Record<string, number | null>;
 export type Pagination = { limit: number; offset: number; total: number };

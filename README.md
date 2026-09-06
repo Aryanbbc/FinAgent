@@ -18,6 +18,7 @@ Historical strategy research is easy to make irreproducible: data can change, co
 - FastAPI with typed schemas, pagination/filtering, request IDs, structured errors, local health state, and OpenAPI docs.
 - Next.js research workspace with dashboard, explorer, data quality, charts, reports, errors/empty/loading states, and responsive navigation.
 - Demo seed, environment check, safe SQLite health/backup/export commands, and one-command local startup.
+- Deployment-ready FastAPI binding, explicit CORS origins, Render Blueprint, Vercel environment wiring, and persistent-disk documentation.
 
 ## Screenshots
 
@@ -175,7 +176,7 @@ tests/                 deterministic Python tests
 
 FinAgent works with historical data and deterministic rules. It does not model all market frictions, guarantee future results, provide real-time data, authenticate users, run in the cloud, or execute paper/live trades. Yahoo historical availability is outside this project’s control. SQLite is appropriate for a single local user, not concurrent multi-user deployment.
 
-Future work should remain evidence-driven and preserve reproducibility. It must not silently add LLM trading agents, reinforcement learning, sentiment analysis, brokerage integration, live/paper trading, authentication, payments, or deployment without an explicit versioned scope change.
+Future work should remain evidence-driven and preserve reproducibility. It must not silently add LLM trading agents, reinforcement learning, sentiment analysis, brokerage integration, live/paper trading, authentication, or payments without an explicit versioned scope change.
 
 ## Verification
 
@@ -188,6 +189,8 @@ npm run build
 ```
 
 See [development notes](docs/DEVELOPMENT.md) and [troubleshooting](docs/TROUBLESHOOTING.md) for local operation.
+
+For public Render/Vercel deployment settings, including required CORS and persistent SQLite-disk configuration, read [deployment instructions](docs/DEPLOYMENT.md).
 
 ## Disclaimer
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -26,7 +27,10 @@ def main() -> int:
     database_path = Path(arguments.database)
     if not database_path.is_absolute():
         database_path = PROJECT_ROOT / database_path
-    output_path = Path(arguments.output) if arguments.output else PROJECT_ROOT / "reports" / f"{arguments.experiment}_research_report.md"
+    report_root = Path(os.getenv("REPORTS_PATH", "reports"))
+    if not report_root.is_absolute():
+        report_root = PROJECT_ROOT / report_root
+    output_path = Path(arguments.output) if arguments.output else report_root / f"{arguments.experiment}_research_report.md"
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_path
     output = ResearchReportExporter(ExperimentRepository(Database(database_path))).export(arguments.experiment, output_path)

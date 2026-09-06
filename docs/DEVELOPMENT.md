@@ -26,4 +26,4 @@ Tests must remain deterministic and must not use a live market-data request. Pre
 
 ## Change boundaries
 
-Keep FastAPI routes thin, data/research computation typed and testable, and frontend interaction through `frontend/lib/api.ts`. Preserve V0.1–V0.8 configuration compatibility. Do not put credentials, broker behavior, live/paper trading, LLMs, RL, or automated code changes into this repository.
+Keep FastAPI routes thin, data/research computation typed and testable, and frontend interaction through `frontend/lib/api.ts`. Preserve V0.1–V0.8 configuration compatibility. Public deployment uses explicit origins and a persistent SQLite disk; see [deployment](DEPLOYMENT.md). Do not put credentials, broker behavior, live/paper trading, LLMs, RL, or automated code changes into this repository.
