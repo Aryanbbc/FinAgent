@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a configured FinAgent V0.1 historical experiment."""
+"""Run a configured FinAgent V0.2 historical experiment."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _decimal(value: Any) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a FinAgent V0.1 experiment")
+    parser = argparse.ArgumentParser(description="Run a FinAgent V0.2 experiment")
     parser.add_argument("--config", default="config/experiments.yaml", help="Path to experiment YAML configuration")
     arguments = parser.parse_args()
 
@@ -37,7 +37,7 @@ def main() -> int:
     dataset_timestamps = results["equity_curve"]
 
     print("\n========================================")
-    print("\n               FINAGENT V0.1\n")
+    print("\n               FINAGENT V0.2\n")
     print("========================================\n")
     print(f"Experiment:         {experiment_id}")
     print(f"Strategy:           {configuration['strategy']['name']}")
@@ -55,6 +55,11 @@ def main() -> int:
     print(f"Trades:             {metrics['number_of_trades']}")
     print(f"Win Rate:           {_percentage(metrics['win_rate'])}")
     print(f"\nBenchmark Return:   {_percentage(benchmark_metrics['total_return'])}")
+    regime = results.get("regime", {})
+    if regime.get("enabled") and regime.get("latest"):
+        latest_regime = regime["latest"]
+        print(f"Latest Regime:      {latest_regime['regime']}")
+        print(f"Regime Confidence:  {_percentage(latest_regime['confidence'])}")
     print("\n----------------------------------------\n")
     print("EXPERIMENT SAVED SUCCESSFULLY")
     print("\n========================================")

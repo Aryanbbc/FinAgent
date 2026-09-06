@@ -20,6 +20,7 @@ from finagent.database.experiment_repository import ExperimentRepository
 from finagent.evaluation.benchmark import buy_and_hold_benchmark
 from finagent.evaluation.metrics import calculate_metrics
 from finagent.features.pipeline import FeaturePipeline
+from finagent.regime.detector import RuleBasedRegimeDetector, RuleBasedRegimeDetectorConfig
 from finagent.strategies.factory import create_strategy
 
 
@@ -33,7 +34,7 @@ def _deep_merge(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, An
 
 
 def load_configuration(config_path: str | Path, project_root: str | Path) -> dict[str, Any]:
-    """Load an experiment YAML file over the repository's V0.1 defaults."""
+    """Load an experiment YAML file over the repository's V0.2 defaults."""
     root = Path(project_root)
     requested_path = Path(config_path)
     if not requested_path.is_absolute():
@@ -53,12 +54,28 @@ def _curve_records(curve: pd.DataFrame, value_column: str) -> list[dict[str, obj
     ]
 
 
+def _regime_summary(regime_history: pd.DataFrame) -> dict[str, Any]:
+    """Build JSON-safe experiment-result metadata from persisted regime history."""
+    latest_row = regime_history.iloc[-1]
+    latest: dict[str, Any] = {
+        "timestamp": str(latest_row["timestamp"]),
+        "regime": str(latest_row["regime"]),
+        "confidence": float(latest_row["confidence"]),
+        "features": {},
+    }
+    for key in ("rolling_return", "rolling_volatility", "moving_average_slope", "momentum", "drawdown"):
+        value = latest_row[key]
+        latest["features"][key] = None if pd.isna(value) else float(value)
+    distribution = {str(regime): int(count) for regime, count in regime_history["regime"].value_counts().items()}
+    return {"enabled": True, "latest": latest, "distribution": distribution, "observations": int(len(regime_history))}
+
+
 def run_experiment(
     config_path: str | Path,
     project_root: str | Path,
     logger: logging.Logger | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Run, evaluate, persist, and return a V0.1 historical-data experiment."""
+    """Run, evaluate, persist, and return a V0.2 historical-data experiment."""
     root = Path(project_root)
     configuration = load_configuration(config_path, root)
     experiment_config = configuration["experiment"]
@@ -83,6 +100,21 @@ def run_experiment(
     if logger:
         logger.info("event=FEATURES_GENERATED columns=%s", len(featured_data.columns))
 
+    annualization_factor = int(backtest_config.get("annualization_factor", 252))
+    regime_config = configuration.get("regime", {})
+    regime_history: pd.DataFrame | None = None
+    regime_results: dict[str, Any] = {"enabled": False, "latest": None, "distribution": {}, "observations": 0}
+    if regime_config.get("enabled", True):
+        detector = RuleBasedRegimeDetector(RuleBasedRegimeDetectorConfig.from_mapping(regime_config, annualization_factor))
+        regime_history = detector.detect_history(featured_data)
+        regime_results = _regime_summary(regime_history)
+        if logger:
+            logger.info(
+                "event=REGIMES_DETECTED observations=%s latest_regime=%s",
+                len(regime_history),
+                regime_results["latest"]["regime"],
+            )
+
     strategy_config = configuration["strategy"]
     strategy = create_strategy(strategy_config["name"], strategy_config.get("parameters"))
     costs = TransactionCostModel(**backtest_config.get("transaction_costs", {}))
@@ -96,7 +128,6 @@ def run_experiment(
     if logger:
         logger.info("event=EXPERIMENT_COMPLETED trades=%s", len(result.trades))
 
-    annualization_factor = int(backtest_config.get("annualization_factor", 252))
     metrics = calculate_metrics(result.equity_curve, result.trades, annualization_factor, initial_equity=starting_capital)
     benchmark_curve = buy_and_hold_benchmark(market_data, starting_capital, costs)
     benchmark_metrics = calculate_metrics(
@@ -106,6 +137,7 @@ def run_experiment(
     results: dict[str, Any] = {
         "metrics": metrics,
         "benchmark_metrics": benchmark_metrics,
+        "regime": regime_results,
         "equity_curve": _curve_records(result.equity_curve, "equity"),
         "benchmark_curve": _curve_records(benchmark_curve, "benchmark_equity"),
         "final_portfolio": {
@@ -129,6 +161,7 @@ def run_experiment(
         results=results,
         metrics=metrics,
         trades=result.trades,
+        regime_observations=regime_history,
     )
     if logger:
         logger.info("event=EXPERIMENT_SAVED experiment_id=%s", experiment_id)

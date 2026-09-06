@@ -1,4 +1,4 @@
-"""Minimal Streamlit dashboard for persisted FinAgent V0.1 experiments."""
+"""Minimal Streamlit dashboard for persisted FinAgent V0.2 experiments."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def _format_percentage(value: object) -> str:
 
 
 def main() -> None:
-    st.set_page_config(page_title="FinAgent V0.1", layout="wide")
-    st.title("FinAgent V0.1")
+    st.set_page_config(page_title="FinAgent V0.2", layout="wide")
+    st.title("FinAgent V0.2")
     st.caption("Historical quantitative research and simulation — not live trading.")
     database_path = st.sidebar.text_input("SQLite database", value=str(PROJECT_ROOT / "data" / "finagent.db"))
     repository = ExperimentRepository(Database(database_path))
@@ -46,6 +46,21 @@ def main() -> None:
     columns[2].metric("Maximum drawdown", _format_percentage(metrics["maximum_drawdown"]))
     columns[3].metric("Volatility", _format_percentage(metrics["annualized_volatility"]))
     columns[4].metric("Trades", int(metrics["number_of_trades"]))
+
+    regime = experiment.results.get("regime", {})
+    if regime.get("enabled") and regime.get("latest"):
+        latest_regime = regime["latest"]
+        st.subheader("Market Regime")
+        regime_columns = st.columns(3)
+        regime_columns[0].metric("Latest regime", latest_regime["regime"].replace("_", " ").title())
+        regime_columns[1].metric("Confidence", _format_percentage(latest_regime["confidence"]))
+        regime_columns[2].metric("Observations", int(regime["observations"]))
+        regime_history = repository.get_regime_observations(experiment.experiment_id)
+        if not regime_history.empty:
+            counts = regime_history["regime"].value_counts().rename_axis("regime").to_frame("observations")
+            st.bar_chart(counts, use_container_width=True)
+            with st.expander("Regime observation history"):
+                st.dataframe(regime_history, use_container_width=True, hide_index=True)
 
     st.subheader("Equity Curve")
     strategy_curve = pd.DataFrame(experiment.results["equity_curve"])

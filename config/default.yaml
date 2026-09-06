@@ -1,6 +1,6 @@
 application:
   name: FinAgent
-  version: "0.1"
+  version: "0.2"
   live_trading_enabled: false
 
 market:
@@ -11,3 +11,19 @@ backtest:
     percentage_fee: 0.001
     fixed_fee: 0.0
   position_fraction: 1.0
+
+regime:
+  enabled: true
+  return_window: 10
+  volatility_window: 10
+  moving_average_window: 10
+  moving_average_slope_window: 5
+  momentum_window: 5
+  drawdown_window: 20
+  thresholds:
+    bull_return_threshold: 0.02
+    bear_return_threshold: -0.02
+    moving_average_slope_threshold: 0.003
+    high_volatility_threshold: 0.30
+    low_volatility_threshold: 0.10
+    stress_drawdown_threshold: -0.12

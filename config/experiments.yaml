@@ -1,4 +1,4 @@
-# Runnable V0.1 example. Paths are resolved relative to the repository root.
+# Runnable V0.2 example. Paths are resolved relative to the repository root.
 experiment:
   asset: EXAMPLE
   dataset: data/raw/example_ohlcv.csv
@@ -23,6 +23,9 @@ features:
   rolling_volume_mean:
     window: 10
   volume_change: true
+
+regime:
+  enabled: true
 
 strategy:
   name: momentum

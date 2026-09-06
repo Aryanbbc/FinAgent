@@ -42,6 +42,7 @@ class ExperimentRepository:
         results: Mapping[str, Any],
         metrics: Mapping[str, float | int | None],
         trades: pd.DataFrame,
+        regime_observations: pd.DataFrame | None = None,
     ) -> str:
         """Atomically save a complete reproducible experiment and return its ID."""
         experiment_id = self.next_experiment_id()
@@ -96,6 +97,30 @@ class ExperimentRepository:
                 "INSERT INTO metrics (experiment_id, name, value) VALUES (?, ?, ?)",
                 [(experiment_id, name, self._optional_float(value)) for name, value in metrics.items()],
             )
+            if regime_observations is not None and not regime_observations.empty:
+                observation_rows = [
+                    (
+                        experiment_id,
+                        str(observation["timestamp"]),
+                        observation["regime"],
+                        float(observation["confidence"]),
+                        self._optional_float(observation.get("rolling_return")),
+                        self._optional_float(observation.get("rolling_volatility")),
+                        self._optional_float(observation.get("moving_average_slope")),
+                        self._optional_float(observation.get("momentum")),
+                        self._optional_float(observation.get("drawdown")),
+                    )
+                    for observation in regime_observations.to_dict(orient="records")
+                ]
+                connection.executemany(
+                    """
+                    INSERT INTO regime_observations (
+                        experiment_id, timestamp, regime, confidence, rolling_return, rolling_volatility,
+                        moving_average_slope, momentum, drawdown
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    observation_rows,
+                )
         return experiment_id
 
     @staticmethod
@@ -119,6 +144,17 @@ class ExperimentRepository:
             return pd.read_sql_query(
                 "SELECT timestamp, side, price, quantity, transaction_cost, portfolio_value, realized_pnl, trade_return "
                 "FROM trades WHERE experiment_id = ? ORDER BY id",
+                connection,
+                params=(experiment_id,),
+            )
+
+    def get_regime_observations(self, experiment_id: str) -> pd.DataFrame:
+        """Return persisted causal regime observations in chronological order."""
+        with self.database.connect() as connection:
+            return pd.read_sql_query(
+                "SELECT timestamp, regime, confidence, rolling_return, rolling_volatility, "
+                "moving_average_slope, momentum, drawdown "
+                "FROM regime_observations WHERE experiment_id = ? ORDER BY id",
                 connection,
                 params=(experiment_id,),
             )

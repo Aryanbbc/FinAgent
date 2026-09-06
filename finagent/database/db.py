@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class Database:
-    """Creates and connects to the V0.1 SQLite schema."""
+    """Creates and connects to the local V0.1/V0.2 SQLite schema."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -20,7 +20,7 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        """Create V0.1 tables idempotently; this is the initial schema migration."""
+        """Create V0.1/V0.2 tables idempotently, including the regime-observation migration."""
         with self.connect() as connection:
             connection.executescript(
                 """
@@ -59,6 +59,21 @@ class Database:
                     value REAL,
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE,
                     UNIQUE (experiment_id, name)
+                );
+
+                CREATE TABLE IF NOT EXISTS regime_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    experiment_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    regime TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    rolling_return REAL,
+                    rolling_volatility REAL,
+                    moving_average_slope REAL,
+                    momentum REAL,
+                    drawdown REAL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE,
+                    UNIQUE (experiment_id, timestamp)
                 );
                 """
             )

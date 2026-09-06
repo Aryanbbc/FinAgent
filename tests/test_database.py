@@ -34,6 +34,20 @@ def test_repository_persists_experiment_trades_and_metrics(tmp_path) -> None:
         results={"metrics": {"total_return": 0.1}},
         metrics={"total_return": 0.1},
         trades=trades,
+        regime_observations=pd.DataFrame(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "regime": "bull",
+                    "confidence": 0.75,
+                    "rolling_return": 0.05,
+                    "rolling_volatility": 0.10,
+                    "moving_average_slope": 0.02,
+                    "momentum": 0.03,
+                    "drawdown": -0.01,
+                }
+            ]
+        ),
     )
     saved = repository.get_experiment(experiment_id)
     assert experiment_id == "EXP-000001"
@@ -41,4 +55,7 @@ def test_repository_persists_experiment_trades_and_metrics(tmp_path) -> None:
     assert saved.asset == "TEST"
     assert saved.configuration["strategy"]["name"] == "momentum"
     assert repository.get_trades(experiment_id).iloc[0]["side"] == "BUY"
+    regimes = repository.get_regime_observations(experiment_id)
+    assert regimes.iloc[0]["regime"] == "bull"
+    assert regimes.iloc[0]["confidence"] == 0.75
     assert repository.latest_experiment().experiment_id == experiment_id
