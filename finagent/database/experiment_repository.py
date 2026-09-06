@@ -13,6 +13,7 @@ from finagent.critique.models import ExperimentCritique
 from finagent.database.db import Database
 from finagent.database.models import ExperimentRecord
 from finagent.memory.models import ExperimentMemoryRecord, MemoryQueryResult
+from finagent.validation.models import ReproducibilityManifest, ResearchValidationResult
 from finagent.learning.models import (
     CandidateProposal,
     ConfigurationVersion,
@@ -561,6 +562,153 @@ class ExperimentRepository:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM candidate_evaluations ORDER BY created_at DESC LIMIT 1").fetchone()
         return self._decision_from_row(row) if row else None
+
+    # V0.6 reproducibility manifests and research-validation records.
+    def save_manifest(self, manifest: ReproducibilityManifest) -> None:
+        """Persist a configuration/data snapshot needed to reproduce an experiment."""
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO experiment_manifests (experiment_id, created_at, manifest_json)
+                VALUES (?, ?, ?)
+                """,
+                (manifest.experiment_id, manifest.created_at, json.dumps(manifest.to_dict(), sort_keys=True, default=str)),
+            )
+
+    def get_manifest(self, experiment_id: str) -> ReproducibilityManifest | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT manifest_json FROM experiment_manifests WHERE experiment_id = ?", (experiment_id,)).fetchone()
+        return ReproducibilityManifest.from_dict(json.loads(row["manifest_json"])) if row else None
+
+    def next_validation_id(self) -> str:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(CAST(SUBSTR(validation_id, 5) AS INTEGER)), 0) AS last_number FROM research_validations"
+            ).fetchone()
+        return f"VAL-{int(row['last_number']) + 1:06d}"
+
+    def save_research_validation(self, validation: ResearchValidationResult, configuration: Mapping[str, Any]) -> None:
+        """Persist aggregate and granular V0.6 validation evidence for one existing experiment."""
+        payload = validation.to_dict()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_validations (
+                    validation_id, experiment_id, created_at, configuration_json, aggregate_metrics_json, robustness_json,
+                    leakage_json, confidence_intervals_json, manifest_json, validation_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    validation.validation_id,
+                    validation.experiment_id,
+                    datetime.now(UTC).isoformat(),
+                    json.dumps(configuration, sort_keys=True, default=str),
+                    json.dumps(validation.aggregate_metrics.to_dict()),
+                    json.dumps(validation.robustness.to_dict()),
+                    json.dumps(validation.leakage.to_dict()),
+                    json.dumps([item.to_dict() for item in validation.confidence_intervals]),
+                    json.dumps(validation.manifest.to_dict(), sort_keys=True, default=str),
+                    json.dumps(payload, sort_keys=True, default=str),
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO research_validation_assets (
+                    validation_id, asset, dataset, start_date, end_date, passed, metrics_json, benchmark_metrics_json,
+                    regime_distribution_json, agent_observations
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        validation.validation_id,
+                        item.asset,
+                        item.dataset,
+                        item.start_date,
+                        item.end_date,
+                        int(item.passed),
+                        json.dumps(item.metrics.to_dict()),
+                        json.dumps(item.benchmark_metrics.to_dict()),
+                        json.dumps(item.regime_distribution),
+                        item.agent_observations,
+                    )
+                    for item in validation.asset_results
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO research_validation_windows (
+                    validation_id, asset, window_index, window_mode, train_start, train_end, test_start, test_end,
+                    train_observations, test_observations, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        validation.validation_id,
+                        item.asset,
+                        item.window_index,
+                        item.window_mode,
+                        item.train_start,
+                        item.train_end,
+                        item.test_start,
+                        item.test_end,
+                        item.train_observations,
+                        item.test_observations,
+                        json.dumps(item.metrics.to_dict()),
+                    )
+                    for item in validation.windows
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO sensitivity_analysis_results (
+                    validation_id, parameter, parameter_value_json, metrics_json, stability_score
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (validation.validation_id, item.parameter, json.dumps(item.value), json.dumps(item.metrics.to_dict()), item.stability_score)
+                    for item in validation.sensitivity
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO ablation_study_results (
+                    validation_id, variant, enabled_components_json, metrics_json, robustness_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        validation.validation_id,
+                        item.variant,
+                        json.dumps(item.enabled_components),
+                        json.dumps(item.metrics.to_dict()),
+                        json.dumps(item.robustness.to_dict()),
+                    )
+                    for item in validation.ablations
+                ],
+            )
+            connection.executemany(
+                """
+                INSERT INTO benchmark_suite_results (validation_id, asset, benchmark, metrics_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(validation.validation_id, item.asset, item.benchmark, json.dumps(item.metrics.to_dict())) for item in validation.benchmarks],
+            )
+
+    def get_research_validation(self, validation_id: str) -> ResearchValidationResult | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT validation_json FROM research_validations WHERE validation_id = ?", (validation_id,)).fetchone()
+        return ResearchValidationResult.from_dict(json.loads(row["validation_json"])) if row else None
+
+    def latest_research_validation(self, experiment_id: str | None = None) -> ResearchValidationResult | None:
+        query = "SELECT validation_json FROM research_validations"
+        parameters: tuple[Any, ...] = ()
+        if experiment_id is not None:
+            query += " WHERE experiment_id = ?"
+            parameters = (experiment_id,)
+        query += " ORDER BY created_at DESC LIMIT 1"
+        with self.database.connect() as connection:
+            row = connection.execute(query, parameters).fetchone()
+        return ResearchValidationResult.from_dict(json.loads(row["validation_json"])) if row else None
 
     @staticmethod
     def _memory_query_result(row: Any) -> MemoryQueryResult:

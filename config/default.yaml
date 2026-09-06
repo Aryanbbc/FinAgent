@@ -1,6 +1,6 @@
 application:
   name: FinAgent
-  version: "0.5"
+  version: "0.6"
   live_trading_enabled: false
 
 market:
@@ -83,4 +83,8 @@ critic:
 
 learning:
   # Disabled by default. V0.5 runs only when a user invokes scripts/run_improvement.py.
+  enabled: false
+
+validation:
+  # Disabled by default; V0.6 is invoked explicitly with scripts/run_validation.py.
   enabled: false

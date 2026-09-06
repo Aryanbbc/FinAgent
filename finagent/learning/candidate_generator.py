@@ -94,6 +94,15 @@ class CandidateGenerator:
             proposals.append(proposal)
         return tuple(proposals)
 
+    def apply_parameter_change(self, configuration: Mapping[str, Any], parameter: str, value: Any) -> dict[str, Any]:
+        """Return a validated copy with one allowlisted value changed for sensitivity research."""
+        if parameter not in APPROVED_PARAMETERS:
+            raise ConfigurationConstraintError(f"Unapproved candidate parameter: {parameter}")
+        result = copy.deepcopy(dict(configuration))
+        self._set_parameter(result, parameter, value)
+        self.validate_configuration(result)
+        return result
+
     def _parameter_values(
         self,
         configuration: Mapping[str, Any],

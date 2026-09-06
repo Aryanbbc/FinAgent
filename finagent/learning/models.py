@@ -27,6 +27,11 @@ class CandidateReasonCode(str, Enum):
     INCONSISTENT_OUT_OF_SAMPLE_RESULTS = "INCONSISTENT_OUT_OF_SAMPLE_RESULTS"
     INSUFFICIENT_TRADES = "INSUFFICIENT_TRADES"
     NOT_SELECTED = "NOT_SELECTED"
+    ROBUSTNESS_SCORE_TOO_LOW = "ROBUSTNESS_SCORE_TOO_LOW"
+    INSUFFICIENT_ASSET_COVERAGE = "INSUFFICIENT_ASSET_COVERAGE"
+    UNSTABLE_SENSITIVITY_PROFILE = "UNSTABLE_SENSITIVITY_PROFILE"
+    LEAKAGE_CHECK_FAILED = "LEAKAGE_CHECK_FAILED"
+    CONFIDENCE_INTERVAL_UNACCEPTABLE = "CONFIDENCE_INTERVAL_UNACCEPTABLE"
     PROMOTED = "PROMOTED"
     REJECTED = "REJECTED"
 
@@ -246,6 +251,17 @@ class PromotionDecision:
             candidate_metrics=ValidationMetrics.from_dict(dict(data["candidate_metrics"])),
             window_pass_rate=float(data.get("window_pass_rate") or 0.0),
         )
+
+
+@dataclass(frozen=True)
+class PromotionRobustnessEvidence:
+    """Optional V0.6 evidence passed to the V0.5 gate only when configured."""
+
+    robustness_score: float | None = None
+    asset_count: int = 0
+    sensitivity_stable: bool | None = None
+    leakage_passed: bool | None = None
+    confidence_interval_acceptable: bool | None = None
 
 
 @dataclass(frozen=True)

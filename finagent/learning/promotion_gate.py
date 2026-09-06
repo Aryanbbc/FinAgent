@@ -9,6 +9,7 @@ from typing import Any
 from finagent.learning.models import (
     CandidateReasonCode,
     PromotionDecision,
+    PromotionRobustnessEvidence,
     PromotionStatus,
     ValidationMetrics,
     WalkForwardEvaluation,
@@ -25,12 +26,21 @@ class PromotionGateConfig:
     minimum_windows: int = 1
     minimum_trades: int = 1
     maximum_turnover: float = 10.0
+    minimum_robustness_score: float | None = None
+    minimum_assets: int | None = None
+    require_stable_sensitivity: bool = False
+    require_no_leakage: bool = False
+    require_acceptable_confidence_interval: bool = False
 
     def __post_init__(self) -> None:
         if self.maximum_drawdown <= 0 or self.minimum_trades < 0 or self.maximum_turnover < 0 or self.minimum_windows < 1:
             raise ValueError("Promotion risk limits must be non-negative and maximum_drawdown positive")
         if not 0 <= self.minimum_window_pass_rate <= 1:
             raise ValueError("minimum_window_pass_rate must be between zero and one")
+        if self.minimum_robustness_score is not None and not 0 <= self.minimum_robustness_score <= 1:
+            raise ValueError("minimum_robustness_score must be between zero and one")
+        if self.minimum_assets is not None and self.minimum_assets < 1:
+            raise ValueError("minimum_assets must be positive")
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "PromotionGateConfig":
@@ -41,6 +51,13 @@ class PromotionGateConfig:
             minimum_windows=int(raw.get("minimum_windows", 1)),
             minimum_trades=int(raw.get("minimum_trades", 1)),
             maximum_turnover=float(raw.get("maximum_turnover", 10.0)),
+            minimum_robustness_score=(
+                float(raw["minimum_robustness_score"]) if raw.get("minimum_robustness_score") is not None else None
+            ),
+            minimum_assets=int(raw["minimum_assets"]) if raw.get("minimum_assets") is not None else None,
+            require_stable_sensitivity=bool(raw.get("require_stable_sensitivity", False)),
+            require_no_leakage=bool(raw.get("require_no_leakage", False)),
+            require_acceptable_confidence_interval=bool(raw.get("require_acceptable_confidence_interval", False)),
         )
 
 
@@ -50,7 +67,9 @@ class PromotionGate:
     def __init__(self, configuration: PromotionGateConfig | None = None) -> None:
         self.configuration = configuration or PromotionGateConfig()
 
-    def decide(self, evaluation: WalkForwardEvaluation) -> PromotionDecision:
+    def decide(
+        self, evaluation: WalkForwardEvaluation, robustness_evidence: PromotionRobustnessEvidence | None = None
+    ) -> PromotionDecision:
         candidate = evaluation.candidate_aggregate
         parent = evaluation.parent_aggregate
         reasons: list[CandidateReasonCode] = []
@@ -87,6 +106,19 @@ class PromotionGate:
             and candidate.transaction_cost > 0
         ):
             reasons.append(CandidateReasonCode.TRANSACTION_COSTS_ERASE_ADVANTAGE)
+        evidence = robustness_evidence or PromotionRobustnessEvidence()
+        if self.configuration.minimum_robustness_score is not None and (
+            evidence.robustness_score is None or evidence.robustness_score < self.configuration.minimum_robustness_score
+        ):
+            reasons.append(CandidateReasonCode.ROBUSTNESS_SCORE_TOO_LOW)
+        if self.configuration.minimum_assets is not None and evidence.asset_count < self.configuration.minimum_assets:
+            reasons.append(CandidateReasonCode.INSUFFICIENT_ASSET_COVERAGE)
+        if self.configuration.require_stable_sensitivity and evidence.sensitivity_stable is not True:
+            reasons.append(CandidateReasonCode.UNSTABLE_SENSITIVITY_PROFILE)
+        if self.configuration.require_no_leakage and evidence.leakage_passed is not True:
+            reasons.append(CandidateReasonCode.LEAKAGE_CHECK_FAILED)
+        if self.configuration.require_acceptable_confidence_interval and evidence.confidence_interval_acceptable is not True:
+            reasons.append(CandidateReasonCode.CONFIDENCE_INTERVAL_UNACCEPTABLE)
 
         if reasons:
             reasons.append(CandidateReasonCode.REJECTED)

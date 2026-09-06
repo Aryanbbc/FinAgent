@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class Database:
-    """Creates and connects to the local V0.1–V0.5 SQLite schema."""
+    """Creates and connects to the local V0.1–V0.6 SQLite schema."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -20,7 +20,7 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        """Create V0.1–V0.5 tables idempotently, including improvement audit records."""
+        """Create V0.1–V0.6 tables idempotently, including validation and reproducibility records."""
         with self.connect() as connection:
             connection.executescript(
                 """
@@ -191,6 +191,91 @@ class Database:
                     window_pass_rate REAL NOT NULL,
                     FOREIGN KEY (candidate_id) REFERENCES candidate_configurations(candidate_id) ON DELETE CASCADE,
                     FOREIGN KEY (parent_version_id) REFERENCES configuration_versions(version_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS experiment_manifests (
+                    experiment_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS research_validations (
+                    validation_id TEXT PRIMARY KEY,
+                    experiment_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    configuration_json TEXT NOT NULL,
+                    aggregate_metrics_json TEXT NOT NULL,
+                    robustness_json TEXT NOT NULL,
+                    leakage_json TEXT NOT NULL,
+                    confidence_intervals_json TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    validation_json TEXT NOT NULL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS research_validation_assets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    validation_id TEXT NOT NULL,
+                    asset TEXT NOT NULL,
+                    dataset TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    passed INTEGER NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    benchmark_metrics_json TEXT NOT NULL,
+                    regime_distribution_json TEXT NOT NULL,
+                    agent_observations INTEGER NOT NULL,
+                    FOREIGN KEY (validation_id) REFERENCES research_validations(validation_id) ON DELETE CASCADE,
+                    UNIQUE (validation_id, asset)
+                );
+
+                CREATE TABLE IF NOT EXISTS research_validation_windows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    validation_id TEXT NOT NULL,
+                    asset TEXT NOT NULL,
+                    window_index INTEGER NOT NULL,
+                    window_mode TEXT NOT NULL,
+                    train_start TEXT NOT NULL,
+                    train_end TEXT NOT NULL,
+                    test_start TEXT NOT NULL,
+                    test_end TEXT NOT NULL,
+                    train_observations INTEGER NOT NULL,
+                    test_observations INTEGER NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    FOREIGN KEY (validation_id) REFERENCES research_validations(validation_id) ON DELETE CASCADE,
+                    UNIQUE (validation_id, asset, window_index)
+                );
+
+                CREATE TABLE IF NOT EXISTS sensitivity_analysis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    validation_id TEXT NOT NULL,
+                    parameter TEXT NOT NULL,
+                    parameter_value_json TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    stability_score REAL NOT NULL,
+                    FOREIGN KEY (validation_id) REFERENCES research_validations(validation_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS ablation_study_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    validation_id TEXT NOT NULL,
+                    variant TEXT NOT NULL,
+                    enabled_components_json TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    robustness_json TEXT NOT NULL,
+                    FOREIGN KEY (validation_id) REFERENCES research_validations(validation_id) ON DELETE CASCADE,
+                    UNIQUE (validation_id, variant)
+                );
+
+                CREATE TABLE IF NOT EXISTS benchmark_suite_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    validation_id TEXT NOT NULL,
+                    asset TEXT NOT NULL,
+                    benchmark TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    FOREIGN KEY (validation_id) REFERENCES research_validations(validation_id) ON DELETE CASCADE,
+                    UNIQUE (validation_id, asset, benchmark)
                 );
                 """
             )

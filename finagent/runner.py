@@ -1,4 +1,4 @@
-"""Configuration-driven orchestration for a complete V0.4 experiment."""
+"""Configuration-driven orchestration for a complete V0.1–V0.6 experiment."""
 
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ from finagent.features.pipeline import FeaturePipeline
 from finagent.memory.experiment_memory import ExperimentMemory
 from finagent.regime.detector import RuleBasedRegimeDetector, RuleBasedRegimeDetectorConfig
 from finagent.strategies.factory import create_strategy
+from finagent.validation.analysis import build_manifest
+from finagent.validation.models import AssetValidationResult, MetricSnapshot
 
 
 def _deep_merge(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:
@@ -39,7 +41,7 @@ def _deep_merge(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, An
 
 
 def load_configuration(config_path: str | Path, project_root: str | Path) -> dict[str, Any]:
-    """Load an experiment YAML file over the repository's V0.4 defaults."""
+    """Load an experiment YAML file over the repository's V0.6 defaults."""
     root = Path(project_root)
     requested_path = Path(config_path)
     if not requested_path.is_absolute():
@@ -131,7 +133,7 @@ def run_experiment(
     project_root: str | Path,
     logger: logging.Logger | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Run, evaluate, persist, critique, and return a V0.4 historical experiment."""
+    """Run, evaluate, persist, critique, manifest, and return a V0.1–V0.6 historical experiment."""
     root = Path(project_root)
     configuration = load_configuration(config_path, root)
     experiment_config = configuration["experiment"]
@@ -232,6 +234,34 @@ def run_experiment(
         regime_observations=regime_history,
         agent_decisions=result.agent_decisions,
     )
+    manifest = build_manifest(
+        experiment_id,
+        configuration,
+        [
+            AssetValidationResult(
+                asset=asset,
+                dataset=dataset_value,
+                start_date=market_data["timestamp"].iloc[0].date().isoformat(),
+                end_date=market_data["timestamp"].iloc[-1].date().isoformat(),
+                metrics=MetricSnapshot.from_metrics(metrics, _trade_statistics(result.trades).total_transaction_cost),
+                benchmark_metrics=MetricSnapshot.from_metrics(benchmark_metrics),
+                passed=True,
+                regime_distribution=regime_results.get("distribution", {}),
+                agent_observations=len(result.agent_decisions),
+            )
+        ],
+        "single_asset",
+        configuration.get("validation", {}).get("walk_forward", {}),
+        root,
+    )
+    repository.save_manifest(manifest)
+    results["manifest"] = {
+        "enabled": True,
+        "evaluation_mode": manifest.evaluation_mode,
+        "code_version": manifest.code_version,
+        "dataset_count": len(manifest.datasets),
+    }
+    repository.update_experiment_results(experiment_id, results)
     if critic_enabled:
         critic = CriticAgent(CriticAgentConfig(**dict(configuration.get("critic", {}).get("thresholds", {}))), logger=logger)
         critique = critic.run(

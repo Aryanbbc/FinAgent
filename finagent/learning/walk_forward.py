@@ -29,11 +29,21 @@ class WalkForwardConfig:
     test_size: int
     step_size: int
     min_windows: int = 1
+    window_mode: str = "rolling"
+    minimum_train_length: int | None = None
+    minimum_test_length: int | None = None
+    non_overlapping_test_windows: bool = True
 
     def __post_init__(self) -> None:
         if self.train_size < 1 or self.test_size < 2 or self.step_size < 1 or self.min_windows < 1:
             raise ValueError("Walk-forward train_size, test_size, step_size, and min_windows must be positive")
-        if self.step_size < self.test_size:
+        if self.window_mode not in {"rolling", "expanding"}:
+            raise ValueError("window_mode must be 'rolling' or 'expanding'")
+        if self.minimum_train_length is not None and self.train_size < self.minimum_train_length:
+            raise ValueError("train_size must satisfy minimum_train_length")
+        if self.minimum_test_length is not None and self.test_size < self.minimum_test_length:
+            raise ValueError("test_size must satisfy minimum_test_length")
+        if self.non_overlapping_test_windows and self.step_size < self.test_size:
             raise ValueError("step_size must be at least test_size so out-of-sample test windows never overlap")
 
     @classmethod
@@ -43,6 +53,10 @@ class WalkForwardConfig:
             test_size=int(raw.get("test_size", 20)),
             step_size=int(raw.get("step_size", raw.get("test_size", 20))),
             min_windows=int(raw.get("min_windows", 1)),
+            window_mode=str(raw.get("window_mode", "rolling")),
+            minimum_train_length=(int(raw["minimum_train_length"]) if raw.get("minimum_train_length") is not None else None),
+            minimum_test_length=(int(raw["minimum_test_length"]) if raw.get("minimum_test_length") is not None else None),
+            non_overlapping_test_windows=bool(raw.get("non_overlapping_test_windows", True)),
         )
 
 
@@ -57,14 +71,17 @@ class ChronologicalSplit:
 
 
 def chronological_splits(observations: int, configuration: WalkForwardConfig) -> tuple[ChronologicalSplit, ...]:
-    """Create fixed forward-only train/test windows without shuffle or test reuse."""
+    """Create rolling or expanding forward-only windows without shuffle or implicit test reuse."""
     splits: list[ChronologicalSplit] = []
-    train_start = 0
-    while train_start + configuration.train_size + configuration.test_size <= observations:
-        train_end = train_start + configuration.train_size
+    train_start, train_end = 0, configuration.train_size
+    while train_end + configuration.test_size <= observations:
         test_end = train_end + configuration.test_size
         splits.append(ChronologicalSplit(train_start, train_end, train_end, test_end))
-        train_start += configuration.step_size
+        if configuration.window_mode == "expanding":
+            train_end += configuration.step_size
+        else:
+            train_start += configuration.step_size
+            train_end = train_start + configuration.train_size
     return tuple(splits)
 
 

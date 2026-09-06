@@ -1,14 +1,14 @@
-# FinAgent V0.5
+# FinAgent V0.6
 
-FinAgent is a reproducible quantitative-trading research and simulation platform. V0.5 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, V0.3 deterministic decision flow, and V0.4 critique/memory. It adds a user-invoked, constrained configuration-improvement loop: deterministic candidate generation, chronological walk-forward validation, a risk-aware promotion gate, and an immutable version registry.
+FinAgent is a reproducible quantitative-trading research and simulation platform. V0.6 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, V0.3 deterministic decision flow, V0.4 critique/memory, and V0.5 controlled improvement loop. It adds an explicit research-validation layer: multi-asset evaluation, leakage checks, robust walk-forward analysis, parameter sensitivity, bootstrap intervals, ablations, benchmark comparisons, manifests, and Markdown reporting.
 
 It does **not** provide investment advice, guarantee profitability, use AI agents or reinforcement learning, analyze sentiment, or execute live trades. `LIVE_TRADING_ENABLED=false` is the default safety setting.
 
 ## Current stage
 
-V0.5 implements the quantitative research engine, rule-based market regimes, deterministic decision agents, evidence-based critique/memory, and controlled candidate evaluation. It may select a new saved configuration only after out-of-sample, risk-adjusted validation; it never rewrites code, changes a running experiment, or triggers execution.
+V0.6 implements the quantitative research engine, deterministic decision agents, controlled candidate evaluation, and scientific validation of historical results. Its validation suite is user-invoked and opt-in; it cannot alter code, a running experiment, or any execution behavior.
 
-The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs and against a passive benchmark—not to optimize historical profit in isolation. Promotion is based on held-out Sharpe, drawdown, return, consistency, turnover, costs, and minimum trade count.
+The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs, across data sets, and against baselines—not to optimize historical profit in isolation. Promotion remains risk-adjusted and held-out; V0.6 can optionally add robustness guardrails, disabled by default.
 
 ## Install
 
@@ -105,6 +105,42 @@ learning:
   enabled: false
 ```
 
+### V0.6 research validation and robustness
+
+V0.6 is also disabled by default (`validation.enabled: false`). It does not change `run_experiment.py` or the V0.5 promotion workflow. Run the complete two-dataset example explicitly:
+
+```bash
+python scripts/run_validation.py --config config/validation.yaml
+```
+
+The supplied validation configuration evaluates the same FinAgent setup across `EXAMPLE` and `EXAMPLE_SECONDARY`, saving one normal `EXP-XXXXXX` experiment plus a linked `VAL-XXXXXX` validation record. Each asset has comparable starting capital, dates, transaction-cost assumptions, and the same strategy/agent configuration. SQLite persists aggregate/per-asset metrics, pass/fail status, window definitions, sensitivity points, ablations, benchmarks, confidence intervals, robustness breakdown, leakage result, and manifest.
+
+#### Walk-forward and leakage methodology
+
+`validation.walk_forward.window_mode` accepts `rolling` or `expanding`. Both require a minimum train/test size; out-of-sample windows are non-overlapping by default. Every saved window includes explicit train/test date boundaries and metrics. The leakage suite rejects unordered or duplicate timestamps, train/test overlap, reused held-out observations (unless explicitly allowed), preprocessing fitted through a test boundary, and feature values that differ from a causal prefix recomputation.
+
+#### Sensitivity, robustness, and intervals
+
+Sensitivity analyses accept only V0.5-approved strategy/risk parameters, with explicit nearby values in `validation.sensitivity.parameters`. Each point reports return, Sharpe, drawdown, turnover, costs, and a local stability score relative to the parameter's median Sharpe.
+
+The 0–1 robustness score is transparent and decomposed into weighted asset consistency, walk-forward consistency, sensitivity stability, drawdown control, turnover stability, and benchmark consistency. Its weights and drawdown reference limit live in `validation.robustness`; it is a heuristic diagnostic, not an opaque model or proof of generalization.
+
+Bootstrap confidence intervals are labelled **estimated**. They resample realized historical equity returns using the configured seed, sample count, and confidence level. They describe only the observed sample and do not account for serial dependence, regime shifts, multiple testing, or model-selection uncertainty.
+
+#### Ablations, benchmarks, manifest, and report export
+
+The ablation table runs controlled variants: baseline strategy; + regime; + agents; + critic/memory; + self-improvement. Critic/memory and learning are post-experiment components, so their ablation rows do not imply intrabar decision effects. The benchmark suite uses the same raw data, date range, capital, and transaction costs for buy-and-hold, moving average, momentum, and mean reversion.
+
+Every standard experiment stores a reproducibility manifest with its config snapshot, dataset SHA-256 identifiers, asset/date information, enabled modules, seeds, costs, code version when Git is available, evaluation mode, and walk-forward settings. Export a structured Markdown report without rerunning research:
+
+```bash
+python scripts/export_report.py --experiment EXP-000001
+```
+
+By default the report is written to `reports/EXP-000001_research_report.md`; use `--output` or `--database` to override its location or SQLite file.
+
+Optional V0.6 promotion constraints are accepted in `learning.promotion_gate`: `minimum_robustness_score`, `minimum_assets`, `require_stable_sensitivity`, `require_no_leakage`, and `require_acceptable_confidence_interval`. All are disabled unless explicitly set, so V0.5 behavior is unchanged.
+
 ## Dashboard
 
 After at least one experiment has been saved, run:
@@ -113,7 +149,7 @@ After at least one experiment has been saved, run:
 streamlit run dashboard/app.py
 ```
 
-The dashboard shows the latest experiment summary, key metrics, latest regime and agent decision, the V0.4 Experiment Critique section, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history. Once an improvement cycle has run, its **Self-Improvement** section also shows the current version, parent/candidate, latest promotion or rejection, reason codes, candidate changes, each walk-forward test window, and evolution history.
+The dashboard shows the latest experiment summary, key metrics, latest regime and agent decision, the V0.4 Experiment Critique section, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history. Once an improvement cycle has run, its **Self-Improvement** section shows configuration evolution. When V0.6 evidence exists for the selected experiment, it also shows **Research Validation**, **Ablation Study**, **Sensitivity Analysis**, **Benchmark Suite**, and **Reproducibility** sections, including per-asset return/Sharpe/drawdown labels and estimated intervals.
 
 ## Test
 
@@ -121,7 +157,7 @@ The dashboard shows the latest experiment summary, key metrics, latest regime an
 python -m pytest -q
 ```
 
-The tests cover invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, walk-forward chronology/no-look-ahead behavior, promotion/rejection, immutable versions, and the disabled compatibility path.
+The tests cover invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, promotion/rejection, immutable versions, multi-asset execution/aggregation, rolling and expanding validation windows, leakage detection, bootstrap reproducibility, sensitivity, robustness scoring, ablations, benchmark equality, report export, manifests, and backward compatibility.
 
 ## Architecture
 
@@ -141,6 +177,10 @@ CSV OHLCV → validation → feature pipeline → TechnicalAgent → StrategyAge
                                                                         ↓
                        immutable Configuration Versions + candidate/validation SQLite history
                                                                         ↓
+        explicit V0.6 validation → multi-asset / leakage / sensitivity / bootstrap / ablation / benchmarks
+                                                                        ↓
+                              robustness score + reproducibility manifest + Markdown report
+                                                                        ↓
                                                              CLI and Streamlit dashboard
 ```
 
@@ -156,11 +196,12 @@ Key source directories:
 - `finagent/critique`: deterministic CriticAgent and typed critique schemas.
 - `finagent/memory`: typed experiment memory records and retrieval helpers.
 - `finagent/learning`: deterministic LearningAgent, bounded candidate generator, walk-forward evaluator, promotion gate, and workflow models.
+- `finagent/validation`: multi-asset simulation adapter, leakage checks, walk-forward research workflow, transparent analyses, typed validation records, and Markdown export.
 - `finagent/database`: local SQLite schema and experiment repository.
 - `scripts` and `dashboard`: the user-facing runner and Streamlit dashboard.
 
 ## Metrics and research limits
 
-V0.5 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, V0.4 critique/memory, and V0.5 saved validation/promotion evidence. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, critic, and LearningAgent policies are intentionally heuristic. V0.5 mitigates overfitting through bounded changes and held-out chronological tests, but small data sets, fixed rules, limited candidate surfaces, and historical regime shifts remain material limitations.
+V0.6 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, V0.4 critique/memory, V0.5 candidate/promotion evidence, and V0.6 research-validation evidence. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, critic, LearningAgent, sensitivity, and robustness policies are intentionally heuristic. V0.6 mitigates overfitting with bounded configuration changes, chronological held-out windows, multiple assets, and explicit diagnostics, but small or correlated data sets, fixed rules, limited candidate surfaces, historical regime shifts, and bootstrap assumptions remain material limitations.
 
 There are no LLM agents, sentiment analysis, reinforcement learning, unrestricted self-improvement, automatic parameter optimization, candidate code generation, autonomous promotion to trading, live data, paper trading, brokerage connectivity, or live trading in this version.

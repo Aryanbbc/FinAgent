@@ -177,6 +177,103 @@ def main() -> None:
             hide_index=True,
         )
 
+    validation = repository.latest_research_validation(experiment.experiment_id)
+    if validation is not None:
+        st.subheader("Research Validation")
+        st.caption("Historical robustness diagnostics. Confidence intervals are bootstrap estimates, not statistical guarantees.")
+        validation_columns = st.columns(4)
+        validation_columns[0].metric("Robustness score", f"{validation.robustness.score:.3f}")
+        validation_columns[1].metric("Leakage status", "Passed" if validation.leakage.passed else "Failed")
+        validation_columns[2].metric("Assets", len(validation.asset_results))
+        validation_columns[3].metric("Walk-forward windows", len(validation.windows))
+        st.markdown("#### Multi-Asset Summary")
+        asset_frame = pd.DataFrame(
+            [
+                {
+                    "asset": item.asset,
+                    "return": item.metrics.total_return,
+                    "sharpe": item.metrics.sharpe_ratio,
+                    "max_drawdown": item.metrics.maximum_drawdown,
+                    "passed": item.passed,
+                }
+                for item in validation.asset_results
+            ]
+        )
+        st.dataframe(asset_frame, use_container_width=True, hide_index=True)
+        if not asset_frame.empty:
+            st.bar_chart(asset_frame.set_index("asset")[["return", "sharpe", "max_drawdown"]], use_container_width=True)
+        st.markdown("#### Robustness Decomposition")
+        st.dataframe(
+            pd.DataFrame(
+                [{"component": name, "score": value, "weight": validation.robustness.weights.get(name, 0.0)}
+                 for name, value in validation.robustness.components.items()]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.markdown("#### Confidence Intervals (estimated)")
+        st.dataframe(
+            pd.DataFrame([item.to_dict() for item in validation.confidence_intervals]),
+            use_container_width=True,
+            hide_index=True,
+        )
+        with st.expander("Leakage checks"):
+            st.write({"passed": validation.leakage.passed, "checks": validation.leakage.checks, "errors": validation.leakage.errors})
+
+        st.subheader("Ablation Study")
+        ablation_frame = pd.DataFrame(
+            [
+                {
+                    "variant": item.variant,
+                    "components": ", ".join(item.enabled_components),
+                    **item.metrics.to_dict(),
+                    "robustness_score": item.robustness.score,
+                }
+                for item in validation.ablations
+            ]
+        )
+        if ablation_frame.empty:
+            st.caption("No ablation study was configured.")
+        else:
+            st.dataframe(ablation_frame, use_container_width=True, hide_index=True)
+
+        st.subheader("Sensitivity Analysis")
+        sensitivity_frame = pd.DataFrame(
+            [
+                {"parameter": item.parameter, "value": item.value, **item.metrics.to_dict(), "stability_score": item.stability_score}
+                for item in validation.sensitivity
+            ]
+        )
+        if sensitivity_frame.empty:
+            st.caption("No sensitivity analysis was configured.")
+        else:
+            st.dataframe(sensitivity_frame, use_container_width=True, hide_index=True)
+            for parameter, group in sensitivity_frame.groupby("parameter"):
+                st.caption(f"{parameter} sensitivity")
+                st.line_chart(group.set_index("value")[["sharpe_ratio", "total_return", "stability_score"]], use_container_width=True)
+
+        st.subheader("Benchmark Suite")
+        benchmark_frame = pd.DataFrame(
+            [{"asset": item.asset, "benchmark": item.benchmark, **item.metrics.to_dict()} for item in validation.benchmarks]
+        )
+        if benchmark_frame.empty:
+            st.caption("No benchmark suite was configured.")
+        else:
+            st.dataframe(benchmark_frame, use_container_width=True, hide_index=True)
+
+        st.subheader("Reproducibility")
+        manifest = validation.manifest
+        st.write(
+            {
+                "code_version": manifest.code_version,
+                "evaluation_mode": manifest.evaluation_mode,
+                "assets": manifest.assets,
+                "random_seeds": manifest.random_seeds,
+                "transaction_costs": manifest.transaction_costs,
+                "walk_forward": manifest.walk_forward,
+            }
+        )
+
     st.subheader("Equity Curve")
     strategy_curve = pd.DataFrame(experiment.results["equity_curve"])
     benchmark_curve = pd.DataFrame(experiment.results["benchmark_curve"])
