@@ -187,6 +187,44 @@ class ExperimentRepository:
             row = connection.execute("SELECT * FROM experiments ORDER BY created_at DESC LIMIT 1").fetchone()
         return self._to_record(row) if row else None
 
+    def list_experiments(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        search: str | None = None,
+        strategy: str | None = None,
+        asset: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> tuple[list[ExperimentRecord], int]:
+        """Return filtered experiment records and a total count for paginated local clients."""
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if search:
+            clauses.append("(experiment_id LIKE ? OR strategy LIKE ? OR asset LIKE ?)")
+            needle = f"%{search}%"
+            parameters.extend([needle, needle, needle])
+        if strategy:
+            clauses.append("strategy = ?")
+            parameters.append(strategy)
+        if asset:
+            clauses.append("asset = ?")
+            parameters.append(asset)
+        if start_date:
+            clauses.append("end_date >= ?")
+            parameters.append(start_date)
+        if end_date:
+            clauses.append("start_date <= ?")
+            parameters.append(end_date)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.database.connect() as connection:
+            total = connection.execute(f"SELECT COUNT(*) AS count FROM experiments{where}", parameters).fetchone()["count"]
+            rows = connection.execute(
+                f"SELECT * FROM experiments{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
+            ).fetchall()
+        return [self._to_record(row) for row in rows], int(total)
+
     def latest_experiment_memory(self) -> ExperimentMemoryRecord | None:
         """Return the newest completed V0.4 memory record for an opt-in learning run."""
         with self.database.connect() as connection:
@@ -563,6 +601,14 @@ class ExperimentRepository:
             row = connection.execute("SELECT * FROM candidate_evaluations ORDER BY created_at DESC LIMIT 1").fetchone()
         return self._decision_from_row(row) if row else None
 
+    def list_candidate_evaluations(self, limit: int = 20, offset: int = 0) -> tuple[list[PromotionDecision], int]:
+        with self.database.connect() as connection:
+            total = connection.execute("SELECT COUNT(*) AS count FROM candidate_evaluations").fetchone()["count"]
+            rows = connection.execute(
+                "SELECT * FROM candidate_evaluations ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)
+            ).fetchall()
+        return [self._decision_from_row(row) for row in rows], int(total)
+
     # V0.6 reproducibility manifests and research-validation records.
     def save_manifest(self, manifest: ReproducibilityManifest) -> None:
         """Persist a configuration/data snapshot needed to reproduce an experiment."""
@@ -709,6 +755,18 @@ class ExperimentRepository:
         with self.database.connect() as connection:
             row = connection.execute(query, parameters).fetchone()
         return ResearchValidationResult.from_dict(json.loads(row["validation_json"])) if row else None
+
+    def list_research_validations(self, limit: int = 20, offset: int = 0) -> tuple[list[ResearchValidationResult], int]:
+        with self.database.connect() as connection:
+            total = connection.execute("SELECT COUNT(*) AS count FROM research_validations").fetchone()["count"]
+            rows = connection.execute(
+                "SELECT validation_json FROM research_validations ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)
+            ).fetchall()
+        return [ResearchValidationResult.from_dict(json.loads(row["validation_json"])) for row in rows], int(total)
+
+    def count_configuration_versions(self) -> int:
+        with self.database.connect() as connection:
+            return int(connection.execute("SELECT COUNT(*) AS count FROM configuration_versions").fetchone()["count"])
 
     @staticmethod
     def _memory_query_result(row: Any) -> MemoryQueryResult:

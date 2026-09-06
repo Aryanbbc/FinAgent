@@ -1,0 +1,11 @@
+import { DataState } from "@/components/data-state";
+import { api } from "@/lib/api";
+import { load } from "@/lib/load";
+import { label, percent } from "@/lib/format";
+
+export default async function Agents() {
+  const experiments = await load(api.experiments("?limit=1")); const id = experiments.data?.items[0]?.experiment_id;
+  const decisions = id ? await load(api.decisions(id)) : { data: null, error: null };
+  const current = decisions.data?.items.at(-1);
+  return <><header className="page-head"><div><p className="eyebrow">V0.3 Decision Records</p><h1>Agents</h1><p className="subtle">Structured Technical → Regime → Strategy → Risk records only. This view does not expose hidden reasoning.</p></div></header><DataState error={experiments.error ?? decisions.error} empty={!current}>{current && <><section className="pipeline"><section className="panel"><p className="step">01 Technical</p><h2>{label(String(current.technical.trend))}</h2><p className="subtle">Momentum: {label(String(current.technical.momentum))}<br/>Volatility: {label(String(current.technical.volatility))}<br/>RSI: {label(String(current.technical.rsi))}</p></section><section className="panel"><p className="step">02 Regime</p><h2>{label(current.regime.regime)}</h2><p className="subtle">Causal detector confidence {percent(current.regime.confidence)}</p></section><section className="panel"><p className="step">03 Strategy</p><h2>{current.proposal.selected_strategy}</h2><p className="subtle">{current.proposal.action} · {percent(current.proposal.confidence)}<br/>{current.proposal.reason_codes.join(", ")}</p></section><section className="panel"><p className="step">04 Risk</p><h2 className={current.risk.approved ? "good" : "bad"}>{current.risk.approved ? "Approved" : "Rejected"}</h2><p className="subtle">Size {percent(current.risk.adjusted_position_size)}<br/>{current.risk.reason_code}</p></section></section><section className="panel"><h2>Decision history · {id}</h2><table><thead><tr><th>Date</th><th>Trend</th><th>Regime</th><th>Action</th><th>Risk code</th></tr></thead><tbody>{decisions.data!.items.slice(-25).reverse().map(item => <tr key={item.timestamp}><td>{item.timestamp.slice(0,10)}</td><td>{String(item.technical.trend)}</td><td>{item.regime.regime}</td><td>{item.execution_action}</td><td>{item.risk.reason_code}</td></tr>)}</tbody></table></section></>}</DataState></>;
+}

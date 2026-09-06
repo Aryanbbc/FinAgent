@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finagent"
-version = "0.6.0"
+version = "0.7.0"
 description = "A reproducible quantitative trading research and simulation platform."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dashboard = ["streamlit>=1.38", "plotly>=5.20"]
 dev = ["pytest>=8.0"]
+api = ["fastapi>=0.115,<1.0", "uvicorn>=0.30", "httpx>=0.27"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -10,3 +10,7 @@ htmlcov/
 data/finagent.db
 data/*.db
 *.sqlite3
+frontend/node_modules/
+frontend/.next/
+frontend/coverage/
+frontend/*.tsbuildinfo

@@ -1,12 +1,12 @@
-# FinAgent V0.6
+# FinAgent V0.7
 
-FinAgent is a reproducible quantitative-trading research and simulation platform. V0.6 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, V0.3 deterministic decision flow, V0.4 critique/memory, and V0.5 controlled improvement loop. It adds an explicit research-validation layer: multi-asset evaluation, leakage checks, robust walk-forward analysis, parameter sensitivity, bootstrap intervals, ablations, benchmark comparisons, manifests, and Markdown reporting.
+FinAgent is a reproducible quantitative-trading research and simulation platform. V0.7 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, V0.3 deterministic decision flow, V0.4 critique/memory, V0.5 controlled improvement loop, and V0.6 research validation. It adds a local FastAPI boundary and a professional Next.js research workspace without changing the established engine.
 
 It does **not** provide investment advice, guarantee profitability, use AI agents or reinforcement learning, analyze sentiment, or execute live trades. `LIVE_TRADING_ENABLED=false` is the default safety setting.
 
 ## Current stage
 
-V0.6 implements the quantitative research engine, deterministic decision agents, controlled candidate evaluation, and scientific validation of historical results. Its validation suite is user-invoked and opt-in; it cannot alter code, a running experiment, or any execution behavior.
+V0.7 implements a local visualization and control boundary around the existing research engine. Its API is deliberately thin: it reads SQLite artifacts through services and invokes only the same explicit, configuration-validated historical workflows used by the CLI. It cannot alter code, access cloud services, or perform live/paper trading.
 
 The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs, across data sets, and against baselines—not to optimize historical profit in isolation. Promotion remains risk-adjusted and held-out; V0.6 can optionally add robustness guardrails, disabled by default.
 
@@ -17,7 +17,7 @@ Python 3.11 or newer is required.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e '.[dev,dashboard]'
+pip install -e '.[api,dev,dashboard]'
 ```
 
 Copy `.env.example` to `.env` only if you need local environment settings; FinAgent does not require any credentials.
@@ -149,7 +149,38 @@ After at least one experiment has been saved, run:
 streamlit run dashboard/app.py
 ```
 
-The dashboard shows the latest experiment summary, key metrics, latest regime and agent decision, the V0.4 Experiment Critique section, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history. Once an improvement cycle has run, its **Self-Improvement** section shows configuration evolution. When V0.6 evidence exists for the selected experiment, it also shows **Research Validation**, **Ablation Study**, **Sensitivity Analysis**, **Benchmark Suite**, and **Reproducibility** sections, including per-asset return/Sharpe/drawdown labels and estimated intervals.
+This Streamlit screen is retained as the **Legacy / Debug Dashboard**. It shows the latest experiment summary, key metrics, latest regime and agent decision, V0.4 Experiment Critique, regime/agent histories, evolution, and V0.6 research-validation records. The V0.7 Next.js workspace below is the primary interface.
+
+## V0.7 local API and research workspace
+
+Start the typed FastAPI service from the repository root:
+
+```bash
+uvicorn finagent.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs`. The API is local-only by default and allows CORS only from `http://localhost:3000` and `http://127.0.0.1:3000`—never `*`. Environment defaults are documented in `.env.example`:
+
+```dotenv
+DATABASE_URL=sqlite:///data/finagent.db
+API_HOST=127.0.0.1
+API_PORT=8000
+```
+
+The read endpoints expose health, experiments, trades, causal regimes, structured decision records, critiques, configuration versions, controlled-improvement evaluations, V0.6 validation, reports, safe configuration, and system metadata. Collection routes provide bounded `limit`/`offset` pagination; experiment lists also support ID/strategy/asset/date filters. Missing artifacts return a structured `404`; malformed requests receive FastAPI `422` validation responses.
+
+The three POST endpoints—`/api/experiments/run`, `/api/improvements/run`, and `/api/validation/run`—require a `config_path` referencing an existing YAML file under `config/`. They invoke only the existing deterministic local workflows and return metadata labelled `local_historical_simulation`. They are not asynchronous execution infrastructure and never execute a broker/paper-trading action.
+
+Start the frontend in a second terminal:
+
+```bash
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. Set `NEXT_PUBLIC_FINAGENT_API_URL` in `frontend/.env.local` when the API is not at `http://127.0.0.1:8000`. The App Router workspace includes Dashboard, Experiments, Agents, Market Regimes, Self-Improvement, Validation, Reports, and System pages. It uses a centralized typed API client; it does not access SQLite from the browser. The pages disclose only persisted structured inputs, outputs, decisions, reason codes, and metrics—not hidden chain-of-thought.
 
 ## Test
 
@@ -157,7 +188,16 @@ The dashboard shows the latest experiment summary, key metrics, latest regime an
 python -m pytest -q
 ```
 
-The tests cover invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, promotion/rejection, immutable versions, multi-asset execution/aggregation, rolling and expanding validation windows, leakage detection, bootstrap reproducibility, sensitivity, robustness scoring, ablations, benchmark equality, report export, manifests, and backward compatibility.
+The Python suite covers invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, promotion/rejection, immutable versions, multi-asset execution/aggregation, rolling and expanding validation windows, leakage detection, bootstrap reproducibility, sensitivity, robustness scoring, ablations, benchmark equality, report export, manifests, V0.7 API health/list/detail/agent/critique/validation/error behavior, and backward compatibility.
+
+Frontend checks are deliberately lightweight:
+
+```bash
+cd frontend
+npm run check
+npm test
+npm run build
+```
 
 ## Architecture
 
@@ -181,7 +221,9 @@ CSV OHLCV → validation → feature pipeline → TechnicalAgent → StrategyAge
                                                                         ↓
                               robustness score + reproducibility manifest + Markdown report
                                                                         ↓
-                                                             CLI and Streamlit dashboard
+                                              FastAPI service layer → Next.js research workspace
+                                                                        ↓
+                                                 CLI and Legacy / Debug Streamlit dashboard
 ```
 
 Key source directories:
@@ -198,10 +240,13 @@ Key source directories:
 - `finagent/learning`: deterministic LearningAgent, bounded candidate generator, walk-forward evaluator, promotion gate, and workflow models.
 - `finagent/validation`: multi-asset simulation adapter, leakage checks, walk-forward research workflow, transparent analyses, typed validation records, and Markdown export.
 - `finagent/database`: local SQLite schema and experiment repository.
-- `scripts` and `dashboard`: the user-facing runner and Streamlit dashboard.
+- `finagent/api`: typed FastAPI routes, request/response schemas, local settings, and OpenAPI app.
+- `finagent/services`: API-facing retrieval and controlled workflow services; no research logic is duplicated here.
+- `frontend`: Next.js App Router research workspace, reusable components, formats, and centralized typed API client.
+- `scripts` and `dashboard`: unchanged CLI workflows and Legacy / Debug Streamlit dashboard.
 
 ## Metrics and research limits
 
-V0.6 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, V0.4 critique/memory, V0.5 candidate/promotion evidence, and V0.6 research-validation evidence. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, critic, LearningAgent, sensitivity, and robustness policies are intentionally heuristic. V0.6 mitigates overfitting with bounded configuration changes, chronological held-out windows, multiple assets, and explicit diagnostics, but small or correlated data sets, fixed rules, limited candidate surfaces, historical regime shifts, and bootstrap assumptions remain material limitations.
+V0.7 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, V0.4 critique/memory, V0.5 candidate/promotion evidence, and V0.6 research-validation evidence through local API/UI views. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, critic, LearningAgent, sensitivity, and robustness policies are intentionally heuristic. The UI/API does not change the limitations of small or correlated data sets, fixed rules, limited candidate surfaces, historical regime shifts, or bootstrap assumptions.
 
 There are no LLM agents, sentiment analysis, reinforcement learning, unrestricted self-improvement, automatic parameter optimization, candidate code generation, autonomous promotion to trading, live data, paper trading, brokerage connectivity, or live trading in this version.

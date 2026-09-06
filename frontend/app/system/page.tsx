@@ -1,0 +1,10 @@
+import { DataState } from "@/components/data-state";
+import { MetricCard } from "@/components/metric-card";
+import { api } from "@/lib/api";
+import { load } from "@/lib/load";
+import { number } from "@/lib/format";
+
+export default async function System() {
+  const [system, configuration, health] = await Promise.all([load(api.system()), load(api.configuration()), load(api.health())]);
+  return <><header className="page-head"><div><p className="eyebrow">Local Environment</p><h1>System</h1><p className="subtle">Version, configuration, database status, and strictly local safety boundaries.</p></div></header><DataState error={system.error ?? configuration.error ?? health.error} empty={!system.data}>{system.data && configuration.data && <><div className="metric-grid"><MetricCard label="FinAgent" value={`V${system.data.finagent_version}`}/><MetricCard label="API health" value={health.data?.status ?? "—"} tone="positive"/><MetricCard label="Experiments" value={String(system.data.experiment_count)}/><MetricCard label="Config versions" value={String(system.data.configuration_version_count)}/></div><div className="split"><section className="panel"><h2>Local runtime</h2><ul className="list"><li><strong>Git revision</strong><br/><small>{system.data.git_revision ?? "not available"}</small></li><li><strong>SQLite database</strong><br/><small>{system.data.database_path} · {number(system.data.database_size_bytes, 0)} bytes</small></li><li><strong>Latest experiment</strong><br/><small>{system.data.latest_experiment_id ?? "none"}</small></li></ul></section><section className="panel"><h2>Capability boundary</h2><ul className="list">{Object.entries(configuration.data.capabilities).map(([name, enabled]) => <li key={name}><strong className={enabled ? "good" : "bad"}>{enabled ? "Enabled" : "Disabled"}</strong><br/><small>{name.replaceAll("_", " ")}</small></li>)}</ul></section></div><section className="panel"><h2>Configured safe defaults</h2><pre>{JSON.stringify(configuration.data.safe_defaults, null, 2)}</pre></section></>}</DataState></>;
+}
