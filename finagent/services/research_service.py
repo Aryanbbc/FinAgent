@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 
 from finagent import __version__
 from finagent.api.settings import Settings
@@ -236,14 +238,25 @@ class ResearchService:
         return {"finagent_version": __version__, "database_path": str(path), "database_exists": path.exists(), "database_size_bytes": path.stat().st_size if path.exists() else 0, "git_revision": revision, "experiment_count": experiment_count, "configuration_version_count": self.repository.count_configuration_versions(), "latest_experiment_id": latest.experiment_id if latest else None}
 
     def _config_path(self, requested: str) -> str:
+        """Accept only an existing local YAML mapping from the repository config directory."""
         config_root = (self.settings.project_root / "config").resolve()
         path = (self.settings.project_root / requested).resolve()
         if path.suffix not in {".yaml", ".yml"} or not path.is_relative_to(config_root) or not path.is_file():
             raise InvalidConfigurationError("config_path must reference an existing YAML file within config/")
+        try:
+            with path.open(encoding="utf-8") as handle:
+                content = yaml.safe_load(handle)
+        except yaml.YAMLError as error:
+            raise InvalidConfigurationError(f"config_path contains invalid YAML: {error}") from error
+        if not isinstance(content, Mapping):
+            raise InvalidConfigurationError("config_path must contain a YAML mapping")
         return str(path)
 
     def run_experiment(self, config_path: str) -> dict[str, Any]:
         path = self._config_path(config_path)
+        configuration = load_configuration(path, self.settings.project_root)
+        if not isinstance(configuration.get("experiment"), Mapping) or not isinstance(configuration.get("strategy"), Mapping):
+            raise InvalidConfigurationError("experiment configuration requires experiment and strategy mappings")
         experiment_id, result = run_experiment(path, self.settings.project_root)
         return {"workflow": "experiment", "status": "completed", "experiment_id": experiment_id, "run_id": None, "validation_id": None, "metadata": {"trade_count": result["metrics"].get("number_of_trades"), "critic_enabled": result.get("critique", {}).get("enabled", False)}}
 

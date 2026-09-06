@@ -31,7 +31,7 @@ def list_experiments(
     return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 
-@router.post("/run", response_model=ExecutionResponse, status_code=202)
+@router.post("/run", response_model=ExecutionResponse)
 def run(request: RunRequest, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return service.run_experiment(request.config_path)
 
@@ -59,4 +59,3 @@ def agent_decisions(experiment_id: str, service: ResearchService = Depends(get_s
 @router.get("/{experiment_id}/critique", response_model=CritiqueResponse)
 def critique(experiment_id: str, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return service.critique(experiment_id)
-
