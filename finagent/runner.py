@@ -1,4 +1,4 @@
-"""Configuration-driven orchestration for a complete V0.3 experiment."""
+"""Configuration-driven orchestration for a complete V0.4 experiment."""
 
 from __future__ import annotations
 
@@ -19,12 +19,15 @@ from finagent.agents.strategy_agent import StrategyAgent, StrategyAgentConfig
 from finagent.agents.technical_agent import TechnicalAgent, TechnicalAgentConfig
 from finagent.backtesting.costs import TransactionCostModel
 from finagent.backtesting.engine import BacktestEngine
+from finagent.critique.critic_agent import CriticAgent, CriticAgentConfig
+from finagent.critique.models import CriticAgentInput, TradeStatistics, TransactionCostAssumptions
 from finagent.data.loader import CSVDataLoader
 from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.evaluation.benchmark import buy_and_hold_benchmark
 from finagent.evaluation.metrics import calculate_metrics
 from finagent.features.pipeline import FeaturePipeline
+from finagent.memory.experiment_memory import ExperimentMemory
 from finagent.regime.detector import RuleBasedRegimeDetector, RuleBasedRegimeDetectorConfig
 from finagent.strategies.factory import create_strategy
 
@@ -39,7 +42,7 @@ def _deep_merge(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, An
 
 
 def load_configuration(config_path: str | Path, project_root: str | Path) -> dict[str, Any]:
-    """Load an experiment YAML file over the repository's V0.2 defaults."""
+    """Load an experiment YAML file over the repository's V0.4 defaults."""
     root = Path(project_root)
     requested_path = Path(config_path)
     if not requested_path.is_absolute():
@@ -111,6 +114,21 @@ def _agent_summary(agent_decisions: pd.DataFrame, enabled: bool) -> dict[str, An
     }
 
 
+def _trade_statistics(trades: pd.DataFrame) -> TradeStatistics:
+    """Calculate typed cost-aware trade statistics for the V0.4 critic input."""
+    if trades.empty:
+        return TradeStatistics(0, 0, 0.0, 0.0, None)
+    total_notional = float((trades["price"].astype(float) * trades["quantity"].astype(float)).sum())
+    total_cost = float(trades["transaction_cost"].astype(float).sum())
+    return TradeStatistics(
+        number_of_executions=int(len(trades)),
+        closed_trades=int((trades["side"] == "SELL").sum()),
+        total_notional=total_notional,
+        total_transaction_cost=total_cost,
+        transaction_cost_ratio=(total_cost / total_notional) if total_notional else None,
+    )
+
+
 def _build_agent_decision_system(
     configuration: Mapping[str, Any], detector: RuleBasedRegimeDetector, logger: logging.Logger | None
 ) -> AgentDecisionSystem:
@@ -143,7 +161,7 @@ def run_experiment(
     project_root: str | Path,
     logger: logging.Logger | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Run, evaluate, persist, and return a V0.3 historical-data experiment."""
+    """Run, evaluate, persist, critique, and return a V0.4 historical experiment."""
     root = Path(project_root)
     configuration = load_configuration(config_path, root)
     experiment_config = configuration["experiment"]
@@ -209,12 +227,15 @@ def run_experiment(
         benchmark_curve.rename(columns={"benchmark_equity": "equity"}), None, annualization_factor, initial_equity=starting_capital
     )
     agent_results = _agent_summary(result.agent_decisions, agents_enabled)
+    critic_enabled = bool(configuration.get("critic", {}).get("enabled", False))
 
     results: dict[str, Any] = {
         "metrics": metrics,
         "benchmark_metrics": benchmark_metrics,
         "regime": regime_results,
         "agents": agent_results,
+        "critique": {"enabled": False, "output": None},
+        "memory": {"enabled": False, "record": None},
         "equity_curve": _curve_records(result.equity_curve, "equity"),
         "benchmark_curve": _curve_records(benchmark_curve, "benchmark_equity"),
         "final_portfolio": {
@@ -241,6 +262,48 @@ def run_experiment(
         regime_observations=regime_history,
         agent_decisions=result.agent_decisions,
     )
+    if critic_enabled:
+        critic = CriticAgent(CriticAgentConfig(**dict(configuration.get("critic", {}).get("thresholds", {}))), logger=logger)
+        critique = critic.run(
+            CriticAgentInput(
+                experiment_id=experiment_id,
+                strategy=strategy.name,
+                strategy_parameters=dict(strategy_config.get("parameters", {})),
+                metrics=metrics,
+                benchmark_metrics=benchmark_metrics,
+                regime_history=regime_history if regime_history is not None else pd.DataFrame(columns=["timestamp", "regime"]),
+                agent_decision_history=result.agent_decisions,
+                trade_statistics=_trade_statistics(result.trades),
+                transaction_costs=TransactionCostAssumptions(costs.percentage_fee, costs.fixed_fee),
+            )
+        )
+        memory = ExperimentMemory(repository)
+        memory_record = memory.build_record(
+            experiment_id=experiment_id,
+            agent_version="0.3" if agents_enabled else "baseline",
+            strategy=strategy.name,
+            strategy_parameters=dict(strategy_config.get("parameters", {})),
+            metrics=metrics,
+            transaction_costs={"percentage_fee": costs.percentage_fee, "fixed_fee": costs.fixed_fee},
+            critique=critique,
+            regime_history=regime_history if regime_history is not None else pd.DataFrame(columns=["timestamp", "regime"]),
+            equity_curve=result.equity_curve,
+            agent_decisions=result.agent_decisions,
+        )
+        repository.save_critique(critique)
+        memory.store(memory_record)
+        results["critique"] = {"enabled": True, "output": critique.to_dict()}
+        results["memory"] = {
+            "enabled": True,
+            "record": {
+                "agent_version": memory_record.agent_version,
+                "decision_summary": memory_record.decision_summary.to_dict(),
+                "regime_performance": [item.to_dict() for item in memory_record.regime_performance],
+            },
+        }
+        repository.update_experiment_results(experiment_id, results)
+        if logger:
+            logger.info("event=CRITIQUE_GENERATED experiment_id=%s confidence=%.2f", experiment_id, critique.confidence)
     if logger:
         logger.info("event=EXPERIMENT_SAVED experiment_id=%s", experiment_id)
     return experiment_id, results

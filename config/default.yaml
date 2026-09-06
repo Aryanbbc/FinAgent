@@ -1,6 +1,6 @@
 application:
   name: FinAgent
-  version: "0.3"
+  version: "0.4"
   live_trading_enabled: false
 
 market:
@@ -65,3 +65,16 @@ agents:
     reduced_volatility_threshold: 0.30
     reduced_position_size: 0.50
     minimum_confidence: 0.15
+
+critic:
+  # Disabled by default so V0.1–V0.3 configurations retain their prior behavior.
+  enabled: false
+  thresholds:
+    strong_sharpe_threshold: 1.0
+    weak_sharpe_threshold: 0.0
+    controlled_drawdown_threshold: 0.10
+    high_drawdown_threshold: 0.15
+    low_turnover_threshold: 0.50
+    excessive_turnover_threshold: 2.00
+    high_transaction_cost_ratio: 0.01
+    minimum_closed_trades: 3

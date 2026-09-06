@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility entry point for the V0.3 configured experiment backtest."""
+"""Compatibility entry point for the V0.4 configured experiment backtest."""
 
 from run_experiment import main
 

@@ -1,3 +1,3 @@
-"""FinAgent V0.3 quantitative research, regime, and decision-agent engine."""
+"""FinAgent V0.4 quantitative research, decision-agent, critique, and memory engine."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

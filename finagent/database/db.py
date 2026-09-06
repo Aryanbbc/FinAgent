@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class Database:
-    """Creates and connects to the local V0.1–V0.3 SQLite schema."""
+    """Creates and connects to the local V0.1–V0.4 SQLite schema."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -20,7 +20,7 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        """Create V0.1–V0.3 tables idempotently, including regime and agent migrations."""
+        """Create V0.1–V0.4 tables idempotently, including critique and memory migrations."""
         with self.connect() as connection:
             connection.executescript(
                 """
@@ -99,6 +99,47 @@ class Database:
                     risk_reason_code TEXT NOT NULL,
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE,
                     UNIQUE (experiment_id, timestamp)
+                );
+
+                CREATE TABLE IF NOT EXISTS critiques (
+                    experiment_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    strengths_json TEXT NOT NULL,
+                    weaknesses_json TEXT NOT NULL,
+                    failure_modes_json TEXT NOT NULL,
+                    regime_observations_json TEXT NOT NULL,
+                    recommendations_json TEXT NOT NULL,
+                    reason_codes_json TEXT NOT NULL,
+                    critique_json TEXT NOT NULL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS experiment_memory (
+                    experiment_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    agent_version TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    strategy_parameters_json TEXT NOT NULL,
+                    regime_distribution_json TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    maximum_drawdown REAL NOT NULL,
+                    turnover REAL,
+                    transaction_costs_json TEXT NOT NULL,
+                    critique_json TEXT NOT NULL,
+                    decision_summary_json TEXT NOT NULL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS memory_regime_performance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    experiment_id TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    regime TEXT NOT NULL,
+                    observations INTEGER NOT NULL,
+                    compounded_return REAL NOT NULL,
+                    FOREIGN KEY (experiment_id) REFERENCES experiment_memory(experiment_id) ON DELETE CASCADE,
+                    UNIQUE (experiment_id, regime)
                 );
                 """
             )

@@ -1,4 +1,4 @@
-# Runnable V0.2 example. Paths are resolved relative to the repository root.
+# Runnable V0.4 example. Paths are resolved relative to the repository root.
 experiment:
   asset: EXAMPLE
   dataset: data/raw/example_ohlcv.csv
@@ -29,6 +29,10 @@ regime:
 
 # V0.3 example: enable the deterministic technical → regime → strategy → risk flow.
 agents:
+  enabled: true
+
+# V0.4 example: generate a deterministic post-experiment critique and memory record.
+critic:
   enabled: true
 
 strategy:

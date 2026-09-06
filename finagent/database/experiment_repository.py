@@ -9,8 +9,10 @@ from typing import Any
 
 import pandas as pd
 
+from finagent.critique.models import ExperimentCritique
 from finagent.database.db import Database
 from finagent.database.models import ExperimentRecord
+from finagent.memory.models import ExperimentMemoryRecord, MemoryQueryResult
 from finagent.utils.ids import format_experiment_id
 
 
@@ -212,6 +214,177 @@ class ExperimentRepository:
             decisions["strategy_reason_codes"] = decisions.pop("strategy_reason_codes_json").map(json.loads)
             decisions["risk_approved"] = decisions["risk_approved"].astype(bool)
         return decisions
+
+    def update_experiment_results(self, experiment_id: str, results: Mapping[str, Any]) -> None:
+        """Attach post-experiment V0.4 output to an already persisted experiment."""
+        with self.database.connect() as connection:
+            connection.execute(
+                "UPDATE experiments SET results_json = ? WHERE experiment_id = ?",
+                (json.dumps(results, default=str), experiment_id),
+            )
+
+    def save_critique(self, critique: ExperimentCritique) -> None:
+        """Persist one typed deterministic critique for an experiment."""
+        payload = critique.to_dict()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO critiques (
+                    experiment_id, created_at, confidence, strengths_json, weaknesses_json, failure_modes_json,
+                    regime_observations_json, recommendations_json, reason_codes_json, critique_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    critique.experiment_id,
+                    datetime.now(UTC).isoformat(),
+                    critique.confidence,
+                    json.dumps(payload["strengths"]),
+                    json.dumps(payload["weaknesses"]),
+                    json.dumps(payload["failure_modes"]),
+                    json.dumps(payload["regime_observations"]),
+                    json.dumps(payload["recommendations"]),
+                    json.dumps(payload["reason_codes"]),
+                    json.dumps(payload),
+                ),
+            )
+
+    def get_critique(self, experiment_id: str) -> ExperimentCritique | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT critique_json FROM critiques WHERE experiment_id = ?", (experiment_id,)).fetchone()
+        return ExperimentCritique.from_dict(json.loads(row["critique_json"])) if row else None
+
+    def save_experiment_memory(self, record: ExperimentMemoryRecord) -> None:
+        """Persist the retrieval-oriented V0.4 memory record and regime performance rows."""
+        payload = record.to_dict()
+        with self.database.connect() as connection:
+            experiment = connection.execute(
+                "SELECT created_at FROM experiments WHERE experiment_id = ?", (record.experiment_id,)
+            ).fetchone()
+            if experiment is None:
+                raise ValueError(f"Experiment does not exist: {record.experiment_id}")
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO experiment_memory (
+                    experiment_id, created_at, agent_version, strategy, strategy_parameters_json,
+                    regime_distribution_json, metrics_json, maximum_drawdown, turnover, transaction_costs_json,
+                    critique_json, decision_summary_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.experiment_id,
+                    experiment["created_at"],
+                    record.agent_version,
+                    record.strategy,
+                    json.dumps(payload["strategy_parameters"]),
+                    json.dumps(payload["regime_distribution"]),
+                    json.dumps(payload["metrics"]),
+                    record.maximum_drawdown,
+                    record.turnover,
+                    json.dumps(payload["transaction_costs"]),
+                    json.dumps(payload["critique"]),
+                    json.dumps(payload["decision_summary"]),
+                ),
+            )
+            connection.execute("DELETE FROM memory_regime_performance WHERE experiment_id = ?", (record.experiment_id,))
+            connection.executemany(
+                """
+                INSERT INTO memory_regime_performance (
+                    experiment_id, strategy, regime, observations, compounded_return
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (record.experiment_id, record.strategy, item.regime, item.observations, item.compounded_return)
+                    for item in record.regime_performance
+                ],
+            )
+
+    def get_experiment_memory(self, experiment_id: str) -> ExperimentMemoryRecord | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM experiment_memory WHERE experiment_id = ?", (experiment_id,)).fetchone()
+            performance_rows = connection.execute(
+                "SELECT regime, observations, compounded_return FROM memory_regime_performance WHERE experiment_id = ? ORDER BY regime",
+                (experiment_id,),
+            ).fetchall()
+        if row is None:
+            return None
+        data = {
+            "experiment_id": row["experiment_id"],
+            "agent_version": row["agent_version"],
+            "strategy": row["strategy"],
+            "strategy_parameters": json.loads(row["strategy_parameters_json"]),
+            "regime_distribution": json.loads(row["regime_distribution_json"]),
+            "regime_performance": [dict(item) for item in performance_rows],
+            "metrics": json.loads(row["metrics_json"]),
+            "maximum_drawdown": row["maximum_drawdown"],
+            "turnover": row["turnover"],
+            "transaction_costs": json.loads(row["transaction_costs_json"]),
+            "critique": json.loads(row["critique_json"]),
+            "decision_summary": json.loads(row["decision_summary_json"]),
+        }
+        return ExperimentMemoryRecord.from_dict(data)
+
+    def best_performing_strategy_by_regime(self, regime: str, limit: int = 1) -> list[MemoryQueryResult]:
+        return self._ranked_strategy_by_regime(regime, descending=True, limit=limit)
+
+    def worst_performing_strategy_by_regime(self, regime: str, limit: int = 1) -> list[MemoryQueryResult]:
+        return self._ranked_strategy_by_regime(regime, descending=False, limit=limit)
+
+    def _ranked_strategy_by_regime(self, regime: str, descending: bool, limit: int) -> list[MemoryQueryResult]:
+        direction = "DESC" if descending else "ASC"
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT memory.experiment_id, memory.strategy, performance.regime, performance.compounded_return,
+                       memory.maximum_drawdown, memory.turnover, memory.created_at
+                FROM experiment_memory AS memory
+                JOIN memory_regime_performance AS performance ON performance.experiment_id = memory.experiment_id
+                WHERE performance.regime = ?
+                ORDER BY performance.compounded_return {direction}, memory.created_at DESC
+                LIMIT ?
+                """,
+                (regime, limit),
+            ).fetchall()
+        return [self._memory_query_result(row) for row in rows]
+
+    def experiments_with_high_drawdown(self, threshold: float) -> list[MemoryQueryResult]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT experiment_id, strategy, NULL AS regime, NULL AS regime_return, maximum_drawdown, turnover, created_at
+                FROM experiment_memory WHERE maximum_drawdown <= ? ORDER BY maximum_drawdown ASC, created_at DESC
+                """,
+                (-abs(threshold),),
+            ).fetchall()
+        return [self._memory_query_result(row) for row in rows]
+
+    def experiments_with_excessive_turnover(self, threshold: float) -> list[MemoryQueryResult]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT experiment_id, strategy, NULL AS regime, NULL AS regime_return, maximum_drawdown, turnover, created_at
+                FROM experiment_memory WHERE turnover >= ? ORDER BY turnover DESC, created_at DESC
+                """,
+                (threshold,),
+            ).fetchall()
+        return [self._memory_query_result(row) for row in rows]
+
+    def recent_critiques(self, limit: int = 10) -> list[ExperimentCritique]:
+        with self.database.connect() as connection:
+            rows = connection.execute("SELECT critique_json FROM critiques ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [ExperimentCritique.from_dict(json.loads(row["critique_json"])) for row in rows]
+
+    @staticmethod
+    def _memory_query_result(row: Any) -> MemoryQueryResult:
+        regime_return = row["compounded_return"] if "compounded_return" in row.keys() else row["regime_return"]
+        return MemoryQueryResult(
+            experiment_id=row["experiment_id"],
+            strategy=row["strategy"],
+            regime=row["regime"],
+            regime_return=regime_return,
+            maximum_drawdown=row["maximum_drawdown"],
+            turnover=row["turnover"],
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _to_record(row: Any) -> ExperimentRecord:

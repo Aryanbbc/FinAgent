@@ -1,4 +1,4 @@
-"""Minimal Streamlit dashboard for persisted FinAgent V0.3 experiments."""
+"""Minimal Streamlit dashboard for persisted FinAgent V0.4 experiments."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def _format_percentage(value: object) -> str:
 
 
 def main() -> None:
-    st.set_page_config(page_title="FinAgent V0.3", layout="wide")
-    st.title("FinAgent V0.3")
+    st.set_page_config(page_title="FinAgent V0.4", layout="wide")
+    st.title("FinAgent V0.4")
     st.caption("Historical quantitative research and simulation — not live trading.")
     database_path = st.sidebar.text_input("SQLite database", value=str(PROJECT_ROOT / "data" / "finagent.db"))
     repository = ExperimentRepository(Database(database_path))
@@ -74,6 +74,31 @@ def main() -> None:
         with st.expander("Agent decision history"):
             agent_history = repository.get_agent_decisions(experiment.experiment_id)
             st.dataframe(agent_history, use_container_width=True, hide_index=True)
+
+    critique = experiment.results.get("critique", {})
+    if critique.get("enabled") and critique.get("output"):
+        output = critique["output"]
+        st.subheader("Experiment Critique")
+        st.metric("Critic confidence", _format_percentage(output["confidence"]))
+        critique_columns = st.columns(3)
+        for column, title, items in (
+            (critique_columns[0], "Strengths", output["strengths"]),
+            (critique_columns[1], "Weaknesses", output["weaknesses"]),
+            (critique_columns[2], "Failure modes", output["failure_modes"]),
+        ):
+            column.markdown(f"#### {title}")
+            if items:
+                column.markdown("\n".join(f"- `{item['code']}` — {item['summary']}" for item in items))
+            else:
+                column.caption("None detected by the configured rules.")
+        st.markdown("#### Recommendations")
+        recommendations = pd.DataFrame(output["recommendations"])
+        if recommendations.empty:
+            st.caption("No deterministic recommendation was generated.")
+        else:
+            st.dataframe(recommendations, use_container_width=True, hide_index=True)
+        st.markdown("#### Regime observations")
+        st.dataframe(pd.DataFrame(output["regime_observations"]), use_container_width=True, hide_index=True)
 
     st.subheader("Equity Curve")
     strategy_curve = pd.DataFrame(experiment.results["equity_curve"])

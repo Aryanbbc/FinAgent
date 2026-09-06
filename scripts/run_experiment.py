@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a configured FinAgent V0.3 historical experiment."""
+"""Run a configured FinAgent V0.4 historical experiment."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _decimal(value: Any) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a FinAgent V0.3 experiment")
+    parser = argparse.ArgumentParser(description="Run a FinAgent V0.4 experiment")
     parser.add_argument("--config", default="config/experiments.yaml", help="Path to experiment YAML configuration")
     arguments = parser.parse_args()
 
@@ -37,7 +37,7 @@ def main() -> int:
     dataset_timestamps = results["equity_curve"]
 
     print("\n========================================")
-    print("\n               FINAGENT V0.3\n")
+    print("\n               FINAGENT V0.4\n")
     print("========================================\n")
     print(f"Experiment:         {experiment_id}")
     print(f"Strategy:           {configuration['strategy']['name']}")
@@ -66,6 +66,14 @@ def main() -> int:
         print(f"Agent Strategy:     {latest_decision['proposal']['selected_strategy']}")
         print(f"Agent Action:       {latest_decision['execution_action']}")
         print(f"Risk Decision:      {latest_decision['risk']['reason_code']}")
+    critique = results.get("critique", {})
+    if critique.get("enabled") and critique.get("output"):
+        output = critique["output"]
+        strength_codes = ", ".join(item["code"] for item in output["strengths"]) or "None"
+        weakness_codes = ", ".join(item["code"] for item in output["weaknesses"]) or "None"
+        print(f"Critic Confidence:  {_percentage(output['confidence'])}")
+        print(f"Critic Strengths:   {strength_codes}")
+        print(f"Critic Weaknesses:  {weakness_codes}")
     print("\n----------------------------------------\n")
     print("EXPERIMENT SAVED SUCCESSFULLY")
     print("\n========================================")

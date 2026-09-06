@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finagent"
-version = "0.3.0"
+version = "0.4.0"
 description = "A reproducible quantitative trading research and simulation platform."
 readme = "README.md"
 requires-python = ">=3.11"

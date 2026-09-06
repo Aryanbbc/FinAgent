@@ -72,6 +72,8 @@ def test_v01_style_run_remains_available_when_regime_analysis_is_disabled(tmp_pa
 
     assert results["regime"]["enabled"] is False
     assert results["agents"]["enabled"] is False
+    assert results["critique"]["enabled"] is False
+    assert results["memory"]["enabled"] is False
     assert results["metrics"]["number_of_trades"] == 1
     assert ExperimentRepository(Database(database_path)).get_regime_observations(experiment_id).empty
 
@@ -103,7 +105,51 @@ def test_v03_agent_mode_persists_a_full_decision_chain(tmp_path) -> None:
     decisions = ExperimentRepository(Database(database_path)).get_agent_decisions(experiment_id)
 
     assert results["agents"]["enabled"] is True
+    assert results["critique"]["enabled"] is False
     assert results["agents"]["observations"] == 40
     assert results["agents"]["latest"]["proposal"]["selected_strategy"]
     assert len(decisions) == 40
     assert {"risk_reason_code", "strategy_reason_codes"}.issubset(decisions.columns)
+
+
+def test_v04_critic_and_experiment_memory_persist_and_support_retrieval(tmp_path) -> None:
+    database_path = tmp_path / "v04.db"
+    config_path = tmp_path / "v04.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "experiment": {
+                    "asset": "TEST",
+                    "dataset": str(PROJECT_ROOT / "data/raw/example_ohlcv.csv"),
+                    "starting_capital": 100000.0,
+                    "random_seed": 42,
+                },
+                "database_path": str(database_path),
+                "strategy": {
+                    "name": "momentum",
+                    "parameters": {"lookback_window": 5, "entry_threshold": 0.0, "exit_threshold": -0.02},
+                },
+                "regime": {"enabled": True},
+                "agents": {"enabled": True},
+                "critic": {"enabled": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    experiment_id, results = run_experiment(config_path, PROJECT_ROOT)
+    repository = ExperimentRepository(Database(database_path))
+
+    critique = repository.get_critique(experiment_id)
+    memory_record = repository.get_experiment_memory(experiment_id)
+    assert results["critique"]["enabled"] is True
+    assert results["memory"]["enabled"] is True
+    assert critique is not None
+    assert critique.experiment_id == experiment_id
+    assert memory_record is not None
+    assert memory_record.strategy == "momentum"
+    assert repository.get_experiment(experiment_id).results["critique"]["enabled"] is True
+    assert repository.best_performing_strategy_by_regime("sideways")[0].experiment_id == experiment_id
+    assert repository.worst_performing_strategy_by_regime("sideways")[0].experiment_id == experiment_id
+    assert any(result.experiment_id == experiment_id for result in repository.experiments_with_high_drawdown(0.001))
+    assert any(result.experiment_id == experiment_id for result in repository.experiments_with_excessive_turnover(0.0))
+    assert repository.recent_critiques()[0].experiment_id == experiment_id

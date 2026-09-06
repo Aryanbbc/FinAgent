@@ -1,12 +1,12 @@
-# FinAgent V0.3
+# FinAgent V0.4
 
-FinAgent is a reproducible quantitative-trading research and simulation platform. V0.3 preserves the V0.1 historical research engine and V0.2 causal rule-based regimes, then adds a deterministic multi-agent decision flow: Technical → Regime → Strategy → Risk. It loads validated CSV data, derives causal features, simulates baseline strategies and costs, evaluates performance, and stores complete experiments in SQLite.
+FinAgent is a reproducible quantitative-trading research and simulation platform. V0.4 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, and V0.3 deterministic decision flow, then adds a post-experiment CriticAgent and Experiment Memory. It loads validated CSV data, derives causal features, simulates baseline strategies and costs, evaluates performance, and stores complete experiments in SQLite.
 
 It does **not** provide investment advice, guarantee profitability, use AI agents or reinforcement learning, analyze sentiment, or execute live trades. `LIVE_TRADING_ENABLED=false` is the default safety setting.
 
 ## Current stage
 
-V0.3 implements the quantitative research engine, observational rule-based market regimes, and deterministic Strategy/Risk decision agents. The roadmap now continues with experiment critique and memory (V0.4), followed by configuration-only improvement with walk-forward promotion gates (V0.5). Those later-stage components are not included yet.
+V0.4 implements the quantitative research engine, rule-based market regimes, deterministic decision agents, evidence-based critique, and experiment memory. The roadmap now continues with V0.5 configuration-only candidate generation, walk-forward validation, and promotion gates. Those self-improvement components are not included yet.
 
 The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs and against a passive benchmark—not to optimize historical profit in isolation.
 
@@ -30,11 +30,11 @@ The bundled example is a deterministic local CSV experiment:
 python scripts/run_experiment.py --config config/experiments.yaml
 ```
 
-The runner validates `data/raw/example_ohlcv.csv`, generates the configured features, detects a rule-based regime at each bar using only data available through that bar, then—when enabled—runs the Technical, Regime, Strategy, and Risk agents before simulated execution. It compares the result to buy-and-hold using the same cost model and saves experiments, trades, metrics, regime observations, agent decisions, configuration, seed, and equity curves to `data/finagent.db`.
+The runner validates `data/raw/example_ohlcv.csv`, generates causal features, detects a rule-based regime at each bar, and—when enabled—runs the Technical, Regime, Strategy, and Risk agents before simulated execution. After the simulation, V0.4 can produce a deterministic critique and memory record. It saves experiments, trades, metrics, regime observations, agent decisions, critiques, and memory to `data/finagent.db`.
 
 Edit `config/experiments.yaml` to select `moving_average`, `momentum`, or `mean_reversion`, change their parameters, choose a local CSV, or adjust transaction costs. Required CSV columns are `timestamp`, `open`, `high`, `low`, `close`, and `volume`; timestamps must be ascending and unique.
 
-Available baseline strategies are moving-average crossover, price momentum, and rolling-z-score mean reversion. They emit `+1` (long), `0` (hold), or `-1` (exit); V0.2 only simulates long positions.
+Available baseline strategies are moving-average crossover, price momentum, and rolling-z-score mean reversion. They emit `+1` (long), `0` (hold), or `-1` (exit); V0.4 only simulates long positions.
 
 ### Regime configuration
 
@@ -60,6 +60,24 @@ agents:
 
 Agent mode requires `regime.enabled: true`. It does not use LLMs or any learning/optimization component.
 
+### V0.4 critique and experiment memory
+
+`config/experiments.yaml` also enables V0.4 critique. After an experiment completes, **CriticAgent** receives the strategy/parameters, performance and benchmark metrics, regime history, agent decision history, trade statistics, and transaction-cost assumptions. It returns typed strengths, weaknesses, failure modes, regime-specific observations, structured recommendations, reason codes, and confidence.
+
+Experiment Memory persists that critique alongside agent version, strategy parameters, regime distribution/performance, metrics, drawdown, turnover, transaction costs, and a decision-history summary. It supports deterministic retrieval such as:
+
+```python
+from finagent.database.db import Database
+from finagent.database.experiment_repository import ExperimentRepository
+from finagent.memory.experiment_memory import ExperimentMemory
+
+memory = ExperimentMemory(ExperimentRepository(Database("data/finagent.db")))
+memory.best_performing_strategy_by_regime("sideways")
+memory.experiments_with_high_drawdown(0.15)
+```
+
+The critic is descriptive only. Its recommendations never modify parameters, strategies, risk limits, or execution. To preserve V0.1–V0.3-style runs, set `critic.enabled: false`.
+
 ## Dashboard
 
 After at least one experiment has been saved, run:
@@ -68,7 +86,7 @@ After at least one experiment has been saved, run:
 streamlit run dashboard/app.py
 ```
 
-The dashboard shows the latest experiment summary, key metrics, latest regime and confidence, latest full agent decision, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history.
+The dashboard shows the latest experiment summary, key metrics, latest regime and agent decision, the V0.4 Experiment Critique section, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history.
 
 ## Test
 
@@ -76,7 +94,7 @@ The dashboard shows the latest experiment summary, key metrics, latest regime an
 python -m pytest -q
 ```
 
-The tests cover invalid data, deterministic technical and regime features with causal behavior, all three strategy signals, all six regimes, each V0.3 agent, risk gating, agent-backed backtesting, configuration compatibility, accounting/costs, performance calculations, and SQLite persistence.
+The tests cover invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, and SQLite persistence.
 
 ## Architecture
 
@@ -88,7 +106,9 @@ CSV OHLCV → validation → feature pipeline → TechnicalAgent → StrategyAge
                                                                         ↓
                                                    metrics + buy-and-hold benchmark
                                                                         ↓
-                     SQLite experiments/trades/metrics/regimes/agent decisions
+                              CriticAgent → Experiment Memory (post-experiment only)
+                                                                        ↓
+             SQLite experiments/trades/metrics/regimes/agent decisions/critiques/memory
                                                                         ↓
                                                              CLI and Streamlit dashboard
 ```
@@ -102,9 +122,11 @@ Key source directories:
 - `finagent/evaluation`: performance metrics and buy-and-hold benchmark.
 - `finagent/regime`: causal regime features, typed outputs, and rule-based detector.
 - `finagent/agents`: reusable base contract plus technical, regime, strategy, risk, and decision-system agents.
+- `finagent/critique`: deterministic CriticAgent and typed critique schemas.
+- `finagent/memory`: typed experiment memory records and retrieval helpers.
 - `finagent/database`: local SQLite schema and experiment repository.
 - `scripts` and `dashboard`: the user-facing runner and Streamlit dashboard.
 
 ## Metrics and research limits
 
-V0.3 reports the V0.1 return/trade metrics, V0.2 causal regime classifications, and V0.3 agent decisions. Results are historical simulations with configurable percentage and fixed transaction fees; they are not evidence of future performance. Regime and agent policies are intentionally heuristic and each bar has one primary regime/decision chain, so they do not capture every market nuance. There are no LLM agents, sentiment analysis, reinforcement learning, strategy optimization, self-improvement, out-of-sample promotion, live data, paper trading, or brokerage connectivity in this version.
+V0.4 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, and V0.4 critique/memory. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, and critic policies are intentionally heuristic. Critique recommendations are evidence prompts for later manual research, not automatic improvements. There are no LLM agents, sentiment analysis, reinforcement learning, strategy optimization, self-improvement, candidate generation, promotion gates, live data, paper trading, or brokerage connectivity in this version.
