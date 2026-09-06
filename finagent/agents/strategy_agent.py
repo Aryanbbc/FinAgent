@@ -31,6 +31,11 @@ class StrategyAgentConfig:
             MarketRegime.STRESS.value: "moving_average",
         }
     )
+    strategy_weights: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if any(not 0 < float(weight) <= 1 for weight in self.strategy_weights.values()):
+            raise ValueError("strategy_weights must be in (0, 1]")
 
 
 class StrategyAgent(BaseAgent[StrategyAgentInput, StrategyProposal]):
@@ -80,7 +85,9 @@ class StrategyAgent(BaseAgent[StrategyAgentInput, StrategyProposal]):
             selected_strategy=selected_strategy,
             action=action,
             confidence=self._confidence(agent_input),
-            requested_position_size=1.0 if action == AgentAction.LONG else 0.0,
+            requested_position_size=self.configuration.strategy_weights.get(selected_strategy, 1.0)
+            if action == AgentAction.LONG
+            else 0.0,
             reason_codes=tuple(reason_codes),
         )
 

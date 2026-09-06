@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class Database:
-    """Creates and connects to the local V0.1–V0.4 SQLite schema."""
+    """Creates and connects to the local V0.1–V0.5 SQLite schema."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -20,7 +20,7 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        """Create V0.1–V0.4 tables idempotently, including critique and memory migrations."""
+        """Create V0.1–V0.5 tables idempotently, including improvement audit records."""
         with self.connect() as connection:
             connection.executescript(
                 """
@@ -140,6 +140,57 @@ class Database:
                     compounded_return REAL NOT NULL,
                     FOREIGN KEY (experiment_id) REFERENCES experiment_memory(experiment_id) ON DELETE CASCADE,
                     UNIQUE (experiment_id, regime)
+                );
+
+                CREATE TABLE IF NOT EXISTS configuration_versions (
+                    version_id TEXT PRIMARY KEY,
+                    parent_version_id TEXT,
+                    candidate_id TEXT,
+                    created_at TEXT NOT NULL,
+                    configuration_json TEXT NOT NULL,
+                    validation_metrics_json TEXT,
+                    status TEXT NOT NULL,
+                    reason_codes_json TEXT NOT NULL,
+                    FOREIGN KEY (parent_version_id) REFERENCES configuration_versions(version_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS candidate_configurations (
+                    candidate_id TEXT PRIMARY KEY,
+                    parent_version_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    configuration_json TEXT NOT NULL,
+                    parameter_changes_json TEXT NOT NULL,
+                    reason_codes_json TEXT NOT NULL,
+                    FOREIGN KEY (parent_version_id) REFERENCES configuration_versions(version_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS walk_forward_validations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    candidate_id TEXT NOT NULL,
+                    window_index INTEGER NOT NULL,
+                    train_start TEXT NOT NULL,
+                    train_end TEXT NOT NULL,
+                    test_start TEXT NOT NULL,
+                    test_end TEXT NOT NULL,
+                    train_observations INTEGER NOT NULL,
+                    test_observations INTEGER NOT NULL,
+                    parent_metrics_json TEXT NOT NULL,
+                    candidate_metrics_json TEXT NOT NULL,
+                    FOREIGN KEY (candidate_id) REFERENCES candidate_configurations(candidate_id) ON DELETE CASCADE,
+                    UNIQUE (candidate_id, window_index)
+                );
+
+                CREATE TABLE IF NOT EXISTS candidate_evaluations (
+                    candidate_id TEXT PRIMARY KEY,
+                    parent_version_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    parent_metrics_json TEXT NOT NULL,
+                    candidate_metrics_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reason_codes_json TEXT NOT NULL,
+                    window_pass_rate REAL NOT NULL,
+                    FOREIGN KEY (candidate_id) REFERENCES candidate_configurations(candidate_id) ON DELETE CASCADE,
+                    FOREIGN KEY (parent_version_id) REFERENCES configuration_versions(version_id)
                 );
                 """
             )

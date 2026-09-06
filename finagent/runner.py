@@ -13,10 +13,7 @@ import pandas as pd
 import yaml
 
 from finagent.agents.decision_system import AgentDecisionSystem
-from finagent.agents.regime_agent import RegimeAgent
-from finagent.agents.risk_agent import RiskAgent, RiskAgentConfig
-from finagent.agents.strategy_agent import StrategyAgent, StrategyAgentConfig
-from finagent.agents.technical_agent import TechnicalAgent, TechnicalAgentConfig
+from finagent.agents.factory import build_agent_decision_system
 from finagent.backtesting.costs import TransactionCostModel
 from finagent.backtesting.engine import BacktestEngine
 from finagent.critique.critic_agent import CriticAgent, CriticAgentConfig
@@ -129,33 +126,6 @@ def _trade_statistics(trades: pd.DataFrame) -> TradeStatistics:
     )
 
 
-def _build_agent_decision_system(
-    configuration: Mapping[str, Any], detector: RuleBasedRegimeDetector, logger: logging.Logger | None
-) -> AgentDecisionSystem:
-    """Create the optional V0.3 agent layer from reproducible configuration."""
-    agent_config = configuration.get("agents", {})
-    technical_config = TechnicalAgentConfig(**dict(agent_config.get("technical", {})))
-    risk_config = RiskAgentConfig(**dict(agent_config.get("risk", {})))
-    strategy_config = dict(agent_config.get("strategy", {}))
-    available_strategy_config = dict(strategy_config.pop("available_strategies", {}))
-    if not available_strategy_config:
-        configured_strategy = configuration["strategy"]
-        available_strategy_config = {configured_strategy["name"]: configured_strategy.get("parameters", {})}
-    available_strategies = {
-        name: create_strategy(name, parameters) for name, parameters in available_strategy_config.items()
-    }
-    strategy_agent_config = StrategyAgentConfig(
-        regime_strategy_map=dict(strategy_config.get("regime_strategy_map", {})) or StrategyAgentConfig().regime_strategy_map
-    )
-    return AgentDecisionSystem(
-        technical_agent=TechnicalAgent(technical_config, logger=logger),
-        regime_agent=RegimeAgent(detector, logger=logger),
-        strategy_agent=StrategyAgent(available_strategies, strategy_agent_config, logger=logger),
-        risk_agent=RiskAgent(risk_config, logger=logger),
-        logger=logger,
-    )
-
-
 def run_experiment(
     config_path: str | Path,
     project_root: str | Path,
@@ -208,7 +178,7 @@ def run_experiment(
     agents_enabled = bool(configuration.get("agents", {}).get("enabled", False))
     if agents_enabled and not regime_config.get("enabled", True):
         raise ValueError("V0.3 agent mode requires regime.enabled to remain true")
-    agent_decision_system = _build_agent_decision_system(configuration, regime_detector, logger) if agents_enabled else None
+    agent_decision_system = build_agent_decision_system(configuration, regime_detector, logger) if agents_enabled else None
     result = BacktestEngine(
         strategy=strategy,
         starting_capital=starting_capital,

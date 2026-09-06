@@ -13,6 +13,14 @@ from finagent.critique.models import ExperimentCritique
 from finagent.database.db import Database
 from finagent.database.models import ExperimentRecord
 from finagent.memory.models import ExperimentMemoryRecord, MemoryQueryResult
+from finagent.learning.models import (
+    CandidateProposal,
+    ConfigurationVersion,
+    PromotionDecision,
+    PromotionStatus,
+    WalkForwardEvaluation,
+    WalkForwardWindow,
+)
 from finagent.utils.ids import format_experiment_id
 
 
@@ -177,6 +185,12 @@ class ExperimentRepository:
         with self.database.connect() as connection:
             row = connection.execute("SELECT * FROM experiments ORDER BY created_at DESC LIMIT 1").fetchone()
         return self._to_record(row) if row else None
+
+    def latest_experiment_memory(self) -> ExperimentMemoryRecord | None:
+        """Return the newest completed V0.4 memory record for an opt-in learning run."""
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT experiment_id FROM experiment_memory ORDER BY created_at DESC LIMIT 1").fetchone()
+        return self.get_experiment_memory(row["experiment_id"]) if row else None
 
     def get_trades(self, experiment_id: str) -> pd.DataFrame:
         with self.database.connect() as connection:
@@ -373,6 +387,181 @@ class ExperimentRepository:
             rows = connection.execute("SELECT critique_json FROM critiques ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [ExperimentCritique.from_dict(json.loads(row["critique_json"])) for row in rows]
 
+    # V0.5 configuration evolution records are append-only.  A candidate or version is never rewritten.
+    def next_candidate_number(self) -> int:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(CAST(SUBSTR(candidate_id, 6) AS INTEGER)), 0) AS last_number "
+                "FROM candidate_configurations"
+            ).fetchone()
+        return int(row["last_number"]) + 1
+
+    def next_version_id(self) -> str:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(CAST(SUBSTR(version_id, 11) AS INTEGER)), 0) AS last_number "
+                "FROM configuration_versions"
+            ).fetchone()
+        return f"FinAgent-A{int(row['last_number']) + 1:04d}"
+
+    def save_configuration_version(self, version: ConfigurationVersion) -> None:
+        """Insert an immutable baseline or promoted configuration version."""
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO configuration_versions (
+                    version_id, parent_version_id, candidate_id, created_at, configuration_json,
+                    validation_metrics_json, status, reason_codes_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version.version_id,
+                    version.parent_version_id,
+                    version.candidate_id,
+                    version.created_at,
+                    json.dumps(version.configuration, sort_keys=True, default=str),
+                    json.dumps(version.validation_metrics.to_dict()) if version.validation_metrics else None,
+                    version.status.value,
+                    json.dumps([code.value for code in version.reason_codes]),
+                ),
+            )
+
+    def get_configuration_version(self, version_id: str) -> ConfigurationVersion | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM configuration_versions WHERE version_id = ?", (version_id,)).fetchone()
+        return self._version_from_row(row) if row else None
+
+    def current_configuration_version(self) -> ConfigurationVersion | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM configuration_versions
+                WHERE status IN (?, ?)
+                ORDER BY created_at DESC, version_id DESC LIMIT 1
+                """,
+                (PromotionStatus.BASELINE.value, PromotionStatus.PROMOTED.value),
+            ).fetchone()
+        return self._version_from_row(row) if row else None
+
+    def configuration_version_history(self) -> list[ConfigurationVersion]:
+        with self.database.connect() as connection:
+            rows = connection.execute("SELECT * FROM configuration_versions ORDER BY created_at, version_id").fetchall()
+        return [self._version_from_row(row) for row in rows]
+
+    def save_candidate_configuration(self, candidate: CandidateProposal) -> None:
+        """Insert a generated candidate before it is evaluated; duplicate IDs are rejected by SQLite."""
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO candidate_configurations (
+                    candidate_id, parent_version_id, created_at, configuration_json, parameter_changes_json, reason_codes_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    candidate.candidate_id,
+                    candidate.parent_version_id,
+                    datetime.now(UTC).isoformat(),
+                    json.dumps(candidate.configuration, sort_keys=True, default=str),
+                    json.dumps([change.to_dict() for change in candidate.parameter_changes]),
+                    json.dumps([code.value for code in candidate.reason_codes]),
+                ),
+            )
+
+    def get_candidate_configuration(self, candidate_id: str) -> CandidateProposal | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM candidate_configurations WHERE candidate_id = ?", (candidate_id,)).fetchone()
+        if row is None:
+            return None
+        return CandidateProposal.from_dict(
+            {
+                "candidate_id": row["candidate_id"],
+                "parent_version_id": row["parent_version_id"],
+                "configuration": json.loads(row["configuration_json"]),
+                "parameter_changes": json.loads(row["parameter_changes_json"]),
+                "reason_codes": json.loads(row["reason_codes_json"]),
+            }
+        )
+
+    def save_walk_forward_evaluation(self, evaluation: WalkForwardEvaluation, decision: PromotionDecision) -> None:
+        """Persist every chronological test window plus its aggregate, final gate decision."""
+        if evaluation.candidate_id != decision.candidate_id:
+            raise ValueError("Walk-forward evaluation and promotion decision candidate IDs must match")
+        created_at = datetime.now(UTC).isoformat()
+        with self.database.connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO walk_forward_validations (
+                    candidate_id, window_index, train_start, train_end, test_start, test_end,
+                    train_observations, test_observations, parent_metrics_json, candidate_metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        evaluation.candidate_id,
+                        window.window_index,
+                        window.train_start,
+                        window.train_end,
+                        window.test_start,
+                        window.test_end,
+                        window.train_observations,
+                        window.test_observations,
+                        json.dumps(window.parent_metrics.to_dict()),
+                        json.dumps(window.candidate_metrics.to_dict()),
+                    )
+                    for window in evaluation.windows
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO candidate_evaluations (
+                    candidate_id, parent_version_id, created_at, parent_metrics_json, candidate_metrics_json,
+                    status, reason_codes_json, window_pass_rate
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation.candidate_id,
+                    evaluation.parent_version_id,
+                    created_at,
+                    json.dumps(decision.parent_metrics.to_dict()),
+                    json.dumps(decision.candidate_metrics.to_dict()),
+                    decision.status.value,
+                    json.dumps([code.value for code in decision.reason_codes]),
+                    decision.window_pass_rate,
+                ),
+            )
+
+    def get_validation_windows(self, candidate_id: str) -> list[WalkForwardWindow]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM walk_forward_validations WHERE candidate_id = ? ORDER BY window_index", (candidate_id,)
+            ).fetchall()
+        return [
+            WalkForwardWindow.from_dict(
+                {
+                    "window_index": row["window_index"],
+                    "train_start": row["train_start"],
+                    "train_end": row["train_end"],
+                    "test_start": row["test_start"],
+                    "test_end": row["test_end"],
+                    "train_observations": row["train_observations"],
+                    "test_observations": row["test_observations"],
+                    "parent_metrics": json.loads(row["parent_metrics_json"]),
+                    "candidate_metrics": json.loads(row["candidate_metrics_json"]),
+                }
+            )
+            for row in rows
+        ]
+
+    def get_candidate_evaluation(self, candidate_id: str) -> PromotionDecision | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM candidate_evaluations WHERE candidate_id = ?", (candidate_id,)).fetchone()
+        return self._decision_from_row(row) if row else None
+
+    def latest_candidate_evaluation(self) -> PromotionDecision | None:
+        with self.database.connect() as connection:
+            row = connection.execute("SELECT * FROM candidate_evaluations ORDER BY created_at DESC LIMIT 1").fetchone()
+        return self._decision_from_row(row) if row else None
+
     @staticmethod
     def _memory_query_result(row: Any) -> MemoryQueryResult:
         regime_return = row["compounded_return"] if "compounded_return" in row.keys() else row["regime_return"]
@@ -384,6 +573,34 @@ class ExperimentRepository:
             maximum_drawdown=row["maximum_drawdown"],
             turnover=row["turnover"],
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _version_from_row(row: Any) -> ConfigurationVersion:
+        payload = {
+            "version_id": row["version_id"],
+            "parent_version_id": row["parent_version_id"],
+            "candidate_id": row["candidate_id"],
+            "configuration": json.loads(row["configuration_json"]),
+            "validation_metrics": json.loads(row["validation_metrics_json"]) if row["validation_metrics_json"] else None,
+            "status": row["status"],
+            "reason_codes": json.loads(row["reason_codes_json"]),
+            "created_at": row["created_at"],
+        }
+        return ConfigurationVersion.from_dict(payload)
+
+    @staticmethod
+    def _decision_from_row(row: Any) -> PromotionDecision:
+        return PromotionDecision.from_dict(
+            {
+                "candidate_id": row["candidate_id"],
+                "parent_version_id": row["parent_version_id"],
+                "status": row["status"],
+                "reason_codes": json.loads(row["reason_codes_json"]),
+                "parent_metrics": json.loads(row["parent_metrics_json"]),
+                "candidate_metrics": json.loads(row["candidate_metrics_json"]),
+                "window_pass_rate": row["window_pass_rate"],
+            }
         )
 
     @staticmethod

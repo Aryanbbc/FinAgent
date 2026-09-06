@@ -1,6 +1,6 @@
 application:
   name: FinAgent
-  version: "0.4"
+  version: "0.5"
   live_trading_enabled: false
 
 market:
@@ -58,6 +58,8 @@ agents:
       high_volatility: moving_average
       low_volatility: mean_reversion
       stress: moving_average
+    # V0.5 may vary these bounded position weights only through config/improvement.yaml.
+    strategy_weights: {}
   risk:
     max_position_size: 1.0
     max_drawdown: 0.20
@@ -78,3 +80,7 @@ critic:
     excessive_turnover_threshold: 2.00
     high_transaction_cost_ratio: 0.01
     minimum_closed_trades: 3
+
+learning:
+  # Disabled by default. V0.5 runs only when a user invokes scripts/run_improvement.py.
+  enabled: false

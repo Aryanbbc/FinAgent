@@ -1,4 +1,4 @@
-"""Minimal Streamlit dashboard for persisted FinAgent V0.4 experiments."""
+"""Minimal Streamlit dashboard for persisted FinAgent V0.5 research and improvement records."""
 
 from __future__ import annotations
 
@@ -20,9 +20,13 @@ def _format_percentage(value: object) -> str:
     return "N/A" if value is None else f"{float(value):.2%}"
 
 
+def _format_decimal(value: object) -> str:
+    return "N/A" if value is None else f"{float(value):.3f}"
+
+
 def main() -> None:
-    st.set_page_config(page_title="FinAgent V0.4", layout="wide")
-    st.title("FinAgent V0.4")
+    st.set_page_config(page_title="FinAgent V0.5", layout="wide")
+    st.title("FinAgent V0.5")
     st.caption("Historical quantitative research and simulation — not live trading.")
     database_path = st.sidebar.text_input("SQLite database", value=str(PROJECT_ROOT / "data" / "finagent.db"))
     repository = ExperimentRepository(Database(database_path))
@@ -99,6 +103,79 @@ def main() -> None:
             st.dataframe(recommendations, use_container_width=True, hide_index=True)
         st.markdown("#### Regime observations")
         st.dataframe(pd.DataFrame(output["regime_observations"]), use_container_width=True, hide_index=True)
+
+    current_version = repository.current_configuration_version()
+    latest_evaluation = repository.latest_candidate_evaluation()
+    if current_version is not None or latest_evaluation is not None:
+        st.subheader("Self-Improvement")
+        st.caption("User-invoked, configuration-bounded walk-forward research — no autonomous execution or code changes.")
+        improvement_columns = st.columns(4)
+        improvement_columns[0].metric("Current version", current_version.version_id if current_version else "None")
+        improvement_columns[1].metric("Parent version", current_version.parent_version_id if current_version else "N/A")
+        improvement_columns[2].metric(
+            "Latest candidate", latest_evaluation.candidate_id if latest_evaluation is not None else "None"
+        )
+        improvement_columns[3].metric(
+            "Latest decision", latest_evaluation.status.value if latest_evaluation is not None else "N/A"
+        )
+        if latest_evaluation is not None:
+            st.markdown("#### Latest Promotion Decision")
+            decision_columns = st.columns(4)
+            decision_columns[0].metric("OOS Sharpe", _format_decimal(latest_evaluation.candidate_metrics.sharpe_ratio))
+            decision_columns[1].metric("OOS return", _format_percentage(latest_evaluation.candidate_metrics.total_return))
+            decision_columns[2].metric("OOS drawdown", _format_percentage(latest_evaluation.candidate_metrics.maximum_drawdown))
+            decision_columns[3].metric("Window pass rate", _format_percentage(latest_evaluation.window_pass_rate))
+            st.markdown("**Reason codes:** " + ", ".join(f"`{code.value}`" for code in latest_evaluation.reason_codes))
+            candidate = repository.get_candidate_configuration(latest_evaluation.candidate_id)
+            if candidate is not None:
+                with st.expander("Candidate configuration changes"):
+                    st.dataframe(
+                        pd.DataFrame([change.to_dict() for change in candidate.parameter_changes]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            st.markdown("#### Walk-Forward Test Windows")
+            windows = repository.get_validation_windows(latest_evaluation.candidate_id)
+            if windows:
+                window_rows = [
+                    {
+                        "window": window.window_index,
+                        "test_start": window.test_start[:10],
+                        "test_end": window.test_end[:10],
+                        "parent_sharpe": window.parent_metrics.sharpe_ratio,
+                        "candidate_sharpe": window.candidate_metrics.sharpe_ratio,
+                        "parent_drawdown": window.parent_metrics.maximum_drawdown,
+                        "candidate_drawdown": window.candidate_metrics.maximum_drawdown,
+                        "parent_return": window.parent_metrics.total_return,
+                        "candidate_return": window.candidate_metrics.total_return,
+                        "candidate_beats_parent": (
+                            window.candidate_metrics.sharpe_ratio is not None
+                            and window.parent_metrics.sharpe_ratio is not None
+                            and window.candidate_metrics.sharpe_ratio > window.parent_metrics.sharpe_ratio
+                        ),
+                    }
+                    for window in windows
+                ]
+                st.dataframe(pd.DataFrame(window_rows), use_container_width=True, hide_index=True)
+        st.markdown("#### Evolution History")
+        history = repository.configuration_version_history()
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "version": item.version_id,
+                        "parent": item.parent_version_id,
+                        "candidate": item.candidate_id,
+                        "status": item.status.value,
+                        "created_at": item.created_at,
+                        "reason_codes": ", ".join(code.value for code in item.reason_codes),
+                    }
+                    for item in history
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.subheader("Equity Curve")
     strategy_curve = pd.DataFrame(experiment.results["equity_curve"])

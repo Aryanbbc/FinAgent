@@ -1,14 +1,14 @@
-# FinAgent V0.4
+# FinAgent V0.5
 
-FinAgent is a reproducible quantitative-trading research and simulation platform. V0.4 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, and V0.3 deterministic decision flow, then adds a post-experiment CriticAgent and Experiment Memory. It loads validated CSV data, derives causal features, simulates baseline strategies and costs, evaluates performance, and stores complete experiments in SQLite.
+FinAgent is a reproducible quantitative-trading research and simulation platform. V0.5 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, V0.3 deterministic decision flow, and V0.4 critique/memory. It adds a user-invoked, constrained configuration-improvement loop: deterministic candidate generation, chronological walk-forward validation, a risk-aware promotion gate, and an immutable version registry.
 
 It does **not** provide investment advice, guarantee profitability, use AI agents or reinforcement learning, analyze sentiment, or execute live trades. `LIVE_TRADING_ENABLED=false` is the default safety setting.
 
 ## Current stage
 
-V0.4 implements the quantitative research engine, rule-based market regimes, deterministic decision agents, evidence-based critique, and experiment memory. The roadmap now continues with V0.5 configuration-only candidate generation, walk-forward validation, and promotion gates. Those self-improvement components are not included yet.
+V0.5 implements the quantitative research engine, rule-based market regimes, deterministic decision agents, evidence-based critique/memory, and controlled candidate evaluation. It may select a new saved configuration only after out-of-sample, risk-adjusted validation; it never rewrites code, changes a running experiment, or triggers execution.
 
-The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs and against a passive benchmark—not to optimize historical profit in isolation.
+The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs and against a passive benchmark—not to optimize historical profit in isolation. Promotion is based on held-out Sharpe, drawdown, return, consistency, turnover, costs, and minimum trade count.
 
 ## Install
 
@@ -20,7 +20,7 @@ source .venv/bin/activate
 pip install -e '.[dev,dashboard]'
 ```
 
-Copy `.env.example` to `.env` only if you need local environment settings; V0.1 does not require any credentials.
+Copy `.env.example` to `.env` only if you need local environment settings; FinAgent does not require any credentials.
 
 ## Run an experiment
 
@@ -76,7 +76,34 @@ memory.best_performing_strategy_by_regime("sideways")
 memory.experiments_with_high_drawdown(0.15)
 ```
 
-The critic is descriptive only. Its recommendations never modify parameters, strategies, risk limits, or execution. To preserve V0.1–V0.3-style runs, set `critic.enabled: false`.
+The critic is descriptive during normal experiment execution. V0.5 can read its stored recommendations only inside a separately invoked and opt-in workflow. To preserve V0.1–V0.3-style runs, set `critic.enabled: false`.
+
+### V0.5 controlled improvement loop
+
+V0.5 is off by default (`learning.enabled: false`) and is not called by `run_experiment.py`. First run an experiment with `critic.enabled: true` so that a V0.4 memory record exists. Then explicitly start one bounded research cycle:
+
+```bash
+python scripts/run_improvement.py --config config/improvement.yaml
+```
+
+The lifecycle is deliberately narrow and auditable:
+
+1. Retrieve one persisted Experiment Memory record and its CriticAgent output.
+2. LearningAgent generates deterministic neighbourhood or grid candidates from only the allowlisted values in `learning.search.boundaries`.
+3. Each candidate and its unchanged parent run through chronological, non-overlapping out-of-sample test windows. The simulator only receives data through the end of the current test window, so later observations cannot affect that window.
+4. PromotionGate compares aggregate held-out Sharpe, drawdown, return, consistency, turnover, transaction costs, and trade count. It records `PROMOTED` or explicit rejection reason codes.
+5. SQLite keeps the candidate configuration, every validation window, final decision, and append-only configuration-version history. A promotion creates the next `FinAgent-A0001`-style version; rejection preserves the current version.
+
+The approved candidate surface is limited to moving-average fast/slow windows, momentum and mean-reversion windows/threshold, strategy weights, regime-to-strategy mappings, risk confidence threshold, maximum position size, and volatility limit. Candidates cannot change Python code, data, cost models, agent classes, execution rules, or brokerage settings.
+
+`config/improvement.yaml` demonstrates deterministic neighbourhood search. Set `learning.search.mode: grid` and supply explicit `values` lists for a small configurable grid. The process is reproducible; V0.5 does not implement Bayesian, evolutionary, or random search.
+
+To retain V0.1–V0.4 behavior, leave this default in an experiment or improvement configuration:
+
+```yaml
+learning:
+  enabled: false
+```
 
 ## Dashboard
 
@@ -86,7 +113,7 @@ After at least one experiment has been saved, run:
 streamlit run dashboard/app.py
 ```
 
-The dashboard shows the latest experiment summary, key metrics, latest regime and agent decision, the V0.4 Experiment Critique section, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history.
+The dashboard shows the latest experiment summary, key metrics, latest regime and agent decision, the V0.4 Experiment Critique section, regime/agent histories, strategy-versus-buy-and-hold equity curve, and saved trade history. Once an improvement cycle has run, its **Self-Improvement** section also shows the current version, parent/candidate, latest promotion or rejection, reason codes, candidate changes, each walk-forward test window, and evolution history.
 
 ## Test
 
@@ -94,7 +121,7 @@ The dashboard shows the latest experiment summary, key metrics, latest regime an
 python -m pytest -q
 ```
 
-The tests cover invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, and SQLite persistence.
+The tests cover invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, walk-forward chronology/no-look-ahead behavior, promotion/rejection, immutable versions, and the disabled compatibility path.
 
 ## Architecture
 
@@ -106,9 +133,13 @@ CSV OHLCV → validation → feature pipeline → TechnicalAgent → StrategyAge
                                                                         ↓
                                                    metrics + buy-and-hold benchmark
                                                                         ↓
-                              CriticAgent → Experiment Memory (post-experiment only)
+                              CriticAgent → Experiment Memory
                                                                         ↓
-             SQLite experiments/trades/metrics/regimes/agent decisions/critiques/memory
+        explicit user invocation → LearningAgent → bounded CandidateGenerator
+                                                                        ↓
+                               chronological Walk-Forward Evaluator → PromotionGate
+                                                                        ↓
+                       immutable Configuration Versions + candidate/validation SQLite history
                                                                         ↓
                                                              CLI and Streamlit dashboard
 ```
@@ -124,9 +155,12 @@ Key source directories:
 - `finagent/agents`: reusable base contract plus technical, regime, strategy, risk, and decision-system agents.
 - `finagent/critique`: deterministic CriticAgent and typed critique schemas.
 - `finagent/memory`: typed experiment memory records and retrieval helpers.
+- `finagent/learning`: deterministic LearningAgent, bounded candidate generator, walk-forward evaluator, promotion gate, and workflow models.
 - `finagent/database`: local SQLite schema and experiment repository.
 - `scripts` and `dashboard`: the user-facing runner and Streamlit dashboard.
 
 ## Metrics and research limits
 
-V0.4 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, and V0.4 critique/memory. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, and critic policies are intentionally heuristic. Critique recommendations are evidence prompts for later manual research, not automatic improvements. There are no LLM agents, sentiment analysis, reinforcement learning, strategy optimization, self-improvement, candidate generation, promotion gates, live data, paper trading, or brokerage connectivity in this version.
+V0.5 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, V0.4 critique/memory, and V0.5 saved validation/promotion evidence. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, critic, and LearningAgent policies are intentionally heuristic. V0.5 mitigates overfitting through bounded changes and held-out chronological tests, but small data sets, fixed rules, limited candidate surfaces, and historical regime shifts remain material limitations.
+
+There are no LLM agents, sentiment analysis, reinforcement learning, unrestricted self-improvement, automatic parameter optimization, candidate code generation, autonomous promotion to trading, live data, paper trading, brokerage connectivity, or live trading in this version.
