@@ -12,6 +12,9 @@ import yaml
 
 from finagent import __version__
 from finagent.api.settings import Settings
+from finagent.data.manager import DatasetManager
+from finagent.data.models import MarketDataRequest, MissingDataPolicy
+from finagent.data.registry import DatasetRegistry
 from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.database.models import ExperimentRecord
@@ -29,11 +32,24 @@ class InvalidConfigurationError(ValueError):
 
 
 class ResearchService:
-    """Maps persisted V0.1–V0.6 records into API-safe structures and runs existing workflows."""
+    """Maps V0.1–V0.8 records into API-safe structures and runs existing local workflows."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.repository = ExperimentRepository(Database(settings.database_path))
+        self.dataset_registry = DatasetRegistry(Database(settings.database_path))
+        self.dataset_manager = DatasetManager(self.dataset_registry, settings.data_cache_path)
+
+    @staticmethod
+    def _dataset_summary(dataset: Any) -> dict[str, Any]:
+        return {
+            "dataset_id": dataset.dataset_id, "version_id": dataset.version_id, "version_number": dataset.version_number,
+            "provider": dataset.provider, "symbol": dataset.symbol, "asset_class": dataset.asset_class,
+            "exchange": dataset.exchange, "interval": dataset.interval, "start_date": dataset.start_date,
+            "end_date": dataset.end_date, "row_count": dataset.row_count, "checksum": dataset.checksum,
+            "created_at": dataset.created_at, "last_refreshed_at": dataset.last_refreshed_at,
+            "validation_status": dataset.validation.status.value, "quality_score": dataset.validation.quality.score,
+        }
 
     @staticmethod
     def _clean(value: Any) -> Any:
@@ -235,7 +251,54 @@ class ResearchService:
             revision = None
         _, experiment_count = self.repository.list_experiments(limit=1)
         path = self.settings.database_path
-        return {"finagent_version": __version__, "database_path": str(path), "database_exists": path.exists(), "database_size_bytes": path.stat().st_size if path.exists() else 0, "git_revision": revision, "experiment_count": experiment_count, "configuration_version_count": self.repository.count_configuration_versions(), "latest_experiment_id": latest.experiment_id if latest else None}
+        datasets, dataset_count = self.dataset_registry.list_datasets(limit=1)
+        latest_dataset = datasets[0] if datasets else None
+        warnings = sum(1 for item in datasets if item.validation.status.value == "warning")
+        return {"finagent_version": __version__, "database_path": str(path), "database_exists": path.exists(), "database_size_bytes": path.stat().st_size if path.exists() else 0, "git_revision": revision, "experiment_count": experiment_count, "configuration_version_count": self.repository.count_configuration_versions(), "latest_experiment_id": latest.experiment_id if latest else None, "dataset_count": dataset_count, "latest_dataset_refresh": latest_dataset.last_refreshed_at if latest_dataset else None, "data_providers": self.dataset_manager.providers.describe(), "data_quality_warnings": warnings}
+
+    def data_providers(self) -> list[dict[str, object]]:
+        return self.dataset_manager.providers.describe()
+
+    def data_datasets(self, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+        datasets, total = self.dataset_registry.list_datasets(limit, offset)
+        return [self._dataset_summary(dataset) for dataset in datasets], total
+
+    def data_dataset(self, dataset_id: str) -> dict[str, Any]:
+        dataset = self.dataset_registry.latest(dataset_id)
+        sample = pd.read_csv(dataset.cache_path, nrows=50)
+        for column in sample.columns:
+            sample[column] = sample[column].map(self._clean)
+        payload = self._dataset_summary(dataset)
+        payload.update({
+            "cache_path": dataset.cache_path, "metadata": dataset.metadata.to_dict(), "validation": dataset.validation.to_dict(),
+            "sample_rows": sample.to_dict(orient="records"), "versions": [self._dataset_summary(item) for item in self.dataset_registry.versions(dataset_id)],
+        })
+        return payload
+
+    def fetch_data(self, raw: dict[str, Any]) -> dict[str, Any]:
+        source_path = raw.get("source_path")
+        if source_path:
+            candidate = Path(str(source_path)).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.settings.project_root / candidate
+            candidate = candidate.resolve()
+            if not candidate.is_relative_to(self.settings.project_root.resolve()):
+                raise InvalidConfigurationError("source_path must remain within the local FinAgent project directory")
+            raw["source_path"] = str(candidate)
+        request = MarketDataRequest(
+            symbol=str(raw["symbol"]), start_date=str(raw["start_date"]), end_date=str(raw["end_date"]),
+            interval=str(raw.get("interval", "1d")), force_refresh=bool(raw.get("force_refresh", False)),
+            source_path=str(raw["source_path"]) if raw.get("source_path") else None,
+            asset_class=str(raw.get("asset_class", "equity")),
+        )
+        result = self.dataset_manager.fetch(str(raw["provider"]), request, MissingDataPolicy(str(raw.get("missing_data_policy", "reject"))))
+        return {"dataset": self._dataset_summary(result.dataset), "cache_hit": result.cache_hit}
+
+    def validate_data(self, dataset_id: str, policy: str) -> dict[str, Any]:
+        return self._dataset_summary(self.dataset_manager.validate(dataset_id, MissingDataPolicy(policy)))
+
+    def data_collections(self) -> list[dict[str, Any]]:
+        return [item.to_dict() for item in self.dataset_registry.list_collections()]
 
     def _config_path(self, requested: str) -> str:
         """Accept only an existing local YAML mapping from the repository config directory."""

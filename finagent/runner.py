@@ -19,6 +19,7 @@ from finagent.backtesting.engine import BacktestEngine
 from finagent.critique.critic_agent import CriticAgent, CriticAgentConfig
 from finagent.critique.models import CriticAgentInput, TradeStatistics, TransactionCostAssumptions
 from finagent.data.loader import CSVDataLoader
+from finagent.data.registry import DatasetRegistry
 from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.evaluation.benchmark import buy_and_hold_benchmark
@@ -138,11 +139,35 @@ def run_experiment(
     configuration = load_configuration(config_path, root)
     experiment_config = configuration["experiment"]
     backtest_config = configuration.get("backtest", {})
-    asset = str(experiment_config["asset"])
-    dataset_value = str(experiment_config["dataset"])
-    dataset_path = Path(dataset_value)
-    if not dataset_path.is_absolute():
-        dataset_path = root / dataset_path
+    asset = str(experiment_config.get("asset") or "")
+    database_value = configuration.get("database_path", "data/finagent.db")
+    database_path = Path(database_value)
+    if not database_path.is_absolute():
+        database_path = root / database_path
+    dataset_provenance: dict[str, Any] | None = None
+    dataset_id = experiment_config.get("dataset_id")
+    if dataset_id:
+        dataset_record = DatasetRegistry(Database(database_path)).latest(str(dataset_id))
+        dataset_value = str(dataset_id)
+        dataset_path = Path(dataset_record.cache_path)
+        asset = str(experiment_config.get("asset") or dataset_record.symbol)
+        dataset_provenance = {
+            "dataset_id": dataset_record.dataset_id,
+            "dataset_version": dataset_record.version_id,
+            "provider": dataset_record.provider,
+            "symbol": dataset_record.symbol,
+            "fetch_date": dataset_record.last_refreshed_at,
+            "checksum": dataset_record.checksum,
+            "date_range": {"start": dataset_record.start_date, "end": dataset_record.end_date},
+            "adjustment_mode": dataset_record.metadata.adjustment_mode,
+        }
+    else:
+        if not asset:
+            raise ValueError("experiment.asset is required when experiment.dataset_id is not set")
+        dataset_value = str(experiment_config["dataset"])
+        dataset_path = Path(dataset_value)
+        if not dataset_path.is_absolute():
+            dataset_path = root / dataset_path
     random_seed = experiment_config.get("random_seed")
     if random_seed is not None:
         np.random.seed(int(random_seed))
@@ -217,8 +242,9 @@ def run_experiment(
             "realized_pnl": result.final_portfolio.realized_pnl,
             "unrealized_pnl": result.final_portfolio.unrealized_pnl,
         },
+        "dataset_provenance": dataset_provenance,
     }
-    repository = ExperimentRepository(Database(root / configuration.get("database_path", "data/finagent.db")))
+    repository = ExperimentRepository(Database(database_path))
     experiment_id = repository.save_experiment(
         strategy=strategy.name,
         asset=asset,
@@ -240,7 +266,7 @@ def run_experiment(
         [
             AssetValidationResult(
                 asset=asset,
-                dataset=dataset_value,
+                dataset=str(dataset_path),
                 start_date=market_data["timestamp"].iloc[0].date().isoformat(),
                 end_date=market_data["timestamp"].iloc[-1].date().isoformat(),
                 metrics=MetricSnapshot.from_metrics(metrics, _trade_statistics(result.trades).total_transaction_cost),
@@ -253,6 +279,7 @@ def run_experiment(
         "single_asset",
         configuration.get("validation", {}).get("walk_forward", {}),
         root,
+        {asset: dataset_provenance} if dataset_provenance else None,
     )
     repository.save_manifest(manifest)
     results["manifest"] = {

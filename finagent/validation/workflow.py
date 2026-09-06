@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 from finagent.data.loader import CSVDataLoader
+from finagent.data.registry import DatasetRegistry
 from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.learning.walk_forward import WalkForwardConfig, chronological_splits
@@ -67,7 +68,7 @@ def run_research_validation(
         database_path = root / database_path
     repository = ExperimentRepository(Database(database_path))
 
-    asset_specs = _asset_specs(validation_configuration, source_configuration)
+    asset_specs = _asset_specs(validation_configuration, source_configuration, root)
     simulations = []
     asset_results = []
     windows = []
@@ -222,12 +223,44 @@ def run_research_validation(
     return validation
 
 
-def _asset_specs(validation_configuration: dict[str, Any], source_configuration: dict[str, Any]) -> tuple[AssetSpec, ...]:
+def _asset_specs(
+    validation_configuration: dict[str, Any], source_configuration: dict[str, Any], root: Path
+) -> tuple[AssetSpec, ...]:
+    collection_id = validation_configuration.get("dataset_collection_id")
+    if collection_id:
+        database_value = source_configuration.get("database_path", "data/finagent.db")
+        database_path = Path(database_value)
+        if not database_path.is_absolute():
+            database_path = root / database_path
+        registry = DatasetRegistry(Database(database_path))
+        records = registry.get_collection(str(collection_id)).members
+        return tuple(
+            AssetSpec(str(member["symbol"]), registry.get_version(str(member["version_id"])).cache_path)
+            for member in records
+        )
     raw_assets = validation_configuration.get("assets", [])
     if not raw_assets:
         experiment = source_configuration["experiment"]
+        if experiment.get("dataset_id"):
+            database_value = source_configuration.get("database_path", "data/finagent.db")
+            database_path = Path(database_value)
+            if not database_path.is_absolute():
+                database_path = root / database_path
+            dataset = DatasetRegistry(Database(database_path)).latest(str(experiment["dataset_id"]))
+            return (AssetSpec(str(experiment.get("asset") or dataset.symbol), dataset.cache_path),)
         return (AssetSpec(str(experiment["asset"]), str(experiment["dataset"])),)
-    return tuple(AssetSpec(str(item["asset"]), str(item["dataset"])) for item in raw_assets)
+    resolved_assets = []
+    for item in raw_assets:
+        if item.get("dataset_id"):
+            database_value = source_configuration.get("database_path", "data/finagent.db")
+            database_path = Path(database_value)
+            if not database_path.is_absolute():
+                database_path = root / database_path
+            dataset = DatasetRegistry(Database(database_path)).latest(str(item["dataset_id"]))
+            resolved_assets.append(AssetSpec(str(item.get("asset") or dataset.symbol), dataset.cache_path))
+        else:
+            resolved_assets.append(AssetSpec(str(item["asset"]), str(item["dataset"])))
+    return tuple(resolved_assets)
 
 
 def _pooled_equity_curve(simulations: list[Any]) -> pd.DataFrame:

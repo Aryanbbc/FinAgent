@@ -1,6 +1,6 @@
 # FinAgent implementation guardrails
 
-This repository is currently at **V0.7: Professional API + Frontend Architecture**.
+This repository is currently at **V0.8: Data & Market Intelligence Layer**.
 
 - Keep the platform a local historical-data research and simulation tool.
 - Preserve reproducibility, no-look-ahead-bias safeguards, configurable costs, and deterministic tests.
@@ -12,6 +12,8 @@ This repository is currently at **V0.7: Professional API + Frontend Architecture
 - Preserve single-asset configurations and keep V0.6 promotion robustness checks disabled unless explicitly configured.
 - V0.7 API routes may expose local read-only research data and invoke only existing, validated local simulation workflows. Keep FastAPI routes thin and place orchestration in services.
 - V0.7 frontend is a local, read-only/control surface; no live or paper-trading actions, credentials, accounts, or external broker/API calls.
+- V0.8 providers are historical-data only. Preserve normalized UTC OHLCV data, immutable dataset revisions, deterministic caching, transparent quality scoring, and conservative missing-data handling.
+- Dataset IDs/versions and collections are reproducibility inputs. Do not silently overwrite a dataset revision or let provider metadata change research logic.
 - Do not add LLMs, reinforcement learning, sentiment analysis, unrestricted self-improvement, Bayesian/evolutionary optimization, code rewriting, or live/paper trading integrations.
 - Do not add real-money execution or commit credentials. `LIVE_TRADING_ENABLED` must remain false.
 - Prefer small, modular, configuration-driven Python components and run relevant pytest tests after changes.

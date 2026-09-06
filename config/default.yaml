@@ -1,6 +1,6 @@
 application:
   name: FinAgent
-  version: "0.6"
+  version: "0.8"
   live_trading_enabled: false
 
 market:
@@ -88,3 +88,8 @@ learning:
 validation:
   # Disabled by default; V0.6 is invoked explicitly with scripts/run_validation.py.
   enabled: false
+
+data:
+  # V0.8 defaults: strict validation and local immutable cache revisions.
+  cache_path: data/cache
+  missing_data_policy: reject

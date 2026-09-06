@@ -246,16 +246,22 @@ def build_manifest(
     evaluation_mode: str,
     walk_forward: Mapping[str, Any],
     project_root: Path,
+    dataset_provenance: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ReproducibilityManifest:
     """Capture sufficient configuration, data, and version facts to reproduce a historical validation run."""
-    datasets = tuple(_dataset_identifier(Path(item.dataset), project_root) for item in assets)
+    datasets = []
+    for item in assets:
+        identifier = _dataset_identifier(Path(item.dataset), project_root)
+        if dataset_provenance and item.asset in dataset_provenance:
+            identifier["registry"] = dict(dataset_provenance[item.asset])
+        datasets.append(identifier)
     backtest = configuration.get("backtest", {})
     return ReproducibilityManifest(
         experiment_id=experiment_id,
         created_at=datetime.now(UTC).isoformat(),
         random_seeds={"experiment": configuration.get("experiment", {}).get("random_seed"), "bootstrap": None},
         configuration=copy.deepcopy(configuration),
-        datasets=datasets,
+        datasets=tuple(datasets),
         assets=tuple(item.asset for item in assets),
         date_ranges={item.asset: {"start": item.start_date, "end": item.end_date} for item in assets},
         enabled_modules={

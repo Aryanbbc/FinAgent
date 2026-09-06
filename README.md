@@ -1,12 +1,12 @@
-# FinAgent V0.7
+# FinAgent V0.8
 
-FinAgent is a reproducible quantitative-trading research and simulation platform. V0.7 preserves the V0.1 historical research engine, V0.2 causal rule-based regimes, V0.3 deterministic decision flow, V0.4 critique/memory, V0.5 controlled improvement loop, and V0.6 research validation. It adds a local FastAPI boundary and a professional Next.js research workspace without changing the established engine.
+FinAgent is a reproducible quantitative-trading research and simulation platform. V0.8 preserves V0.1–V0.7 and adds a provider-neutral historical market-data, cache, registry, quality, provenance, and collection layer without changing the research engine.
 
 It does **not** provide investment advice, guarantee profitability, use AI agents or reinforcement learning, analyze sentiment, or execute live trades. `LIVE_TRADING_ENABLED=false` is the default safety setting.
 
 ## Current stage
 
-V0.7 implements a local visualization and control boundary around the existing research engine. Its API is deliberately thin: it reads SQLite artifacts through services and invokes only the same explicit, configuration-validated historical workflows used by the CLI. It cannot alter code, access cloud services, or perform live/paper trading.
+V0.8 keeps the local visualization/control boundary and adds immutable historical dataset revisions. It cannot alter code, access broker accounts, or perform live/paper trading.
 
 The research goal is to evaluate whether simple, clearly specified strategies remain robust after costs, across data sets, and against baselines—not to optimize historical profit in isolation. Promotion remains risk-adjusted and held-out; V0.6 can optionally add robustness guardrails, disabled by default.
 
@@ -182,13 +182,60 @@ npm run dev
 
 Open `http://localhost:3000`. Set `NEXT_PUBLIC_FINAGENT_API_URL` in `frontend/.env.local` when the API is not at `http://127.0.0.1:8000`. The App Router workspace includes Dashboard, Experiments, Agents, Market Regimes, Self-Improvement, Validation, Reports, and System pages. It uses a centralized typed API client; it does not access SQLite from the browser. The pages disclose only persisted structured inputs, outputs, decisions, reason codes, and metrics—not hidden chain-of-thought.
 
+## V0.8 data and market intelligence layer
+
+FinAgent now has a provider-neutral `MarketDataProvider` contract. The shipped providers are:
+
+- `local_csv`: the original strict, backward-compatible local CSV workflow.
+- `yahoo_finance`: a small public historical daily OHLCV adapter. It is isolated behind the provider contract, uses no brokerage functionality or credentials, and is tested with mocked responses.
+
+All provider output is normalized to UTC `timestamp`, `open`, `high`, `low`, `close`, and `volume`. The validation pipeline reports required-column, chronology, duplicate, NaN, non-positive-price, negative-volume, OHLC-bound, suspicious-gap, and timezone findings. Its transparent quality score averages completeness, duplicate rate, chronological consistency, OHLC validity, gap severity, and timezone consistency.
+
+The default missing-data policy is `reject`. `drop`, explicit past-only `forward_fill`, and `warn_only` are available for data curation; none can backfill future values. Dataset metadata records provider, symbol, asset metadata where available, adjustment mode, checksum, quality/validation output, dates, row count, cache path, and refresh timestamps.
+
+Fetched data is cached under deterministic paths in `data/cache/`. The SQLite registry creates a stable dataset ID and immutable `V001`-style content revisions. A force refresh that changes the checksum creates a new revision; an unchanged refresh updates only its refresh/validation metadata. Existing experiment manifests now include dataset ID, revision, provider, symbol, fetch date, checksum, range, and adjustment mode when `experiment.dataset_id` is used.
+
+Register a dataset without any network dependency:
+
+```bash
+python scripts/fetch_data.py --provider local_csv --symbol EXAMPLE --start 2024-01-01 --end 2024-03-01 \
+  --source-path data/raw/example_ohlcv.csv
+python scripts/list_datasets.py
+python scripts/validate_dataset.py --dataset DATA-LOCAL-CSV-EXAMPLE-1D
+```
+
+For public historical daily data, use the same command with `--provider yahoo_finance --symbol AAPL`. Provider availability, rate limits, empty results, invalid symbols, and malformed responses return structured errors; tests do not call the internet.
+
+Use a registered revision in an experiment while preserving all path-based configuration:
+
+```yaml
+experiment:
+  asset: EXAMPLE
+  dataset_id: DATA-LOCAL-CSV-EXAMPLE-1D
+  starting_capital: 100000.0
+```
+
+Named collections lock members to their current revisions for multi-asset V0.6 validation:
+
+```bash
+python scripts/create_collection.py --name US_TECH_SAMPLE --datasets DATA-YAHOO-FINANCE-AAPL-1D DATA-YAHOO-FINANCE-MSFT-1D
+```
+
+```yaml
+validation:
+  enabled: true
+  dataset_collection_id: COLL-US-TECH-SAMPLE
+```
+
+The local API adds `GET /api/data/providers`, `GET /api/data/datasets`, `GET /api/data/datasets/{dataset_id}`, `POST /api/data/fetch`, `POST /api/data/validate`, and `GET /api/data/collections`. The **Data** UI page lists datasets/collections and offers a local fetch form; its detail view renders metadata, quality components/issues, normalized sample rows, close/volume chart, and version history.
+
 ## Test
 
 ```bash
 python -m pytest -q
 ```
 
-The Python suite covers invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, promotion/rejection, immutable versions, multi-asset execution/aggregation, rolling and expanding validation windows, leakage detection, bootstrap reproducibility, sensitivity, robustness scoring, ablations, benchmark equality, report export, manifests, V0.7 API health/list/detail/agent/critique/validation/error behavior, and backward compatibility.
+The Python suite covers invalid data, causal technical/regime behavior, all three strategies, all six regimes, V0.3 agents/risk gating, deterministic critique findings, memory persistence/retrieval, configuration compatibility, accounting/costs, metrics, SQLite persistence, V0.5 allowlist constraints, reproducible candidates, promotion/rejection, immutable versions, multi-asset execution/aggregation, V0.6 validation, V0.7 API behavior, and V0.8 mocked-provider, normalization, quality, cache, checksum revision, collection, dataset reference, provenance, and data API behavior.
 
 Frontend checks are deliberately lightweight:
 
@@ -221,7 +268,9 @@ CSV OHLCV → validation → feature pipeline → TechnicalAgent → StrategyAge
                                                                         ↓
                               robustness score + reproducibility manifest + Markdown report
                                                                         ↓
-                                              FastAPI service layer → Next.js research workspace
+               provider adapters → normalization/quality → deterministic cache → dataset registry/revisions
+                                                                        ↓
+                            dataset provenance + V0.6 collections → FastAPI service layer → Next.js workspace
                                                                         ↓
                                                  CLI and Legacy / Debug Streamlit dashboard
 ```
@@ -240,6 +289,7 @@ Key source directories:
 - `finagent/learning`: deterministic LearningAgent, bounded candidate generator, walk-forward evaluator, promotion gate, and workflow models.
 - `finagent/validation`: multi-asset simulation adapter, leakage checks, walk-forward research workflow, transparent analyses, typed validation records, and Markdown export.
 - `finagent/database`: local SQLite schema and experiment repository.
+- `finagent/data`: local CSV/Yahoo historical providers, normalization, quality policy, deterministic cache manager, immutable dataset registry, and collections.
 - `finagent/api`: typed FastAPI routes, request/response schemas, local settings, and OpenAPI app.
 - `finagent/services`: API-facing retrieval and controlled workflow services; no research logic is duplicated here.
 - `frontend`: Next.js App Router research workspace, reusable components, formats, and centralized typed API client.
@@ -247,6 +297,6 @@ Key source directories:
 
 ## Metrics and research limits
 
-V0.7 reports V0.1 return/trade metrics, V0.2 causal regimes, V0.3 agent decisions, V0.4 critique/memory, V0.5 candidate/promotion evidence, and V0.6 research-validation evidence through local API/UI views. Results are historical simulations with configurable fees; they are not evidence of future performance. Regime, agent, critic, LearningAgent, sensitivity, and robustness policies are intentionally heuristic. The UI/API does not change the limitations of small or correlated data sets, fixed rules, limited candidate surfaces, historical regime shifts, or bootstrap assumptions.
+V0.8 reports V0.1 return/trade metrics through V0.7 API/UI views plus historical data provenance and quality diagnostics. Results are historical simulations with configurable fees; they are not evidence of future performance. The public adapter is daily-only and may be unavailable, rate limited, delayed, incomplete, or differently adjusted from another provider. FinAgent records adjustment mode and warns via metadata, but does not model corporate actions, validate every exchange holiday, provide intraday/high-frequency data, or guarantee vendor completeness.
 
 There are no LLM agents, sentiment analysis, reinforcement learning, unrestricted self-improvement, automatic parameter optimization, candidate code generation, autonomous promotion to trading, live data, paper trading, brokerage connectivity, or live trading in this version.

@@ -34,7 +34,7 @@ def client(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, str, s
     validation = run_research_validation(validation_path, PROJECT_ROOT)
     assert validation is not None
 
-    settings = Settings(project_root=PROJECT_ROOT, database_url=f"sqlite:///{temporary / 'api.db'}")
+    settings = Settings(project_root=PROJECT_ROOT, database_url=f"sqlite:///{temporary / 'api.db'}", data_cache_directory=temporary / "cache")
     return TestClient(create_app(settings)), experiment_id, validation.experiment_id
 
 
@@ -79,3 +79,21 @@ def test_missing_artifacts_return_consistent_404(client: tuple[TestClient, str, 
     response = api.get("/api/experiments/EXP-999999")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "NOT_FOUND"
+
+
+def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestClient, str, str]) -> None:
+    api, _, _ = client
+    assert {item["provider"] for item in api.get("/api/data/providers").json()} >= {"local_csv", "yahoo_finance"}
+    fetched = api.post(
+        "/api/data/fetch",
+        json={
+            "provider": "local_csv", "symbol": "EXAMPLE", "start_date": "2024-01-01", "end_date": "2024-03-01",
+            "interval": "1d", "source_path": "data/raw/example_ohlcv.csv", "force_refresh": False,
+        },
+    )
+    assert fetched.status_code == 200
+    dataset_id = fetched.json()["dataset"]["dataset_id"]
+    assert api.get("/api/data/datasets").json()["pagination"]["total"] == 1
+    detail = api.get(f"/api/data/datasets/{dataset_id}")
+    assert detail.status_code == 200 and detail.json()["sample_rows"]
+    assert api.post("/api/data/validate", json={"dataset_id": dataset_id}).status_code == 200

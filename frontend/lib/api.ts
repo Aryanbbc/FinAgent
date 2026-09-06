@@ -16,7 +16,12 @@ export type Version = { version_id: string; parent_version_id: string | null; ca
 export type Improvement = { run_id: string; parent_version_id: string; status: string; reason_codes: string[]; parent_metrics: MetricMap; candidate_metrics: MetricMap; window_pass_rate: number; parameter_changes?: Record<string, unknown>[]; windows?: Record<string, unknown>[] };
 export type ValidationSummary = { validation_id: string; experiment_id: string; robustness_score: number; leakage_passed: boolean; asset_count: number; window_count: number };
 export type Validation = { validation_id: string; experiment_id: string; aggregate_metrics: MetricMap; robustness: { score: number; components: Record<string, number>; weights: Record<string, number> }; leakage: { passed: boolean; checks: Record<string, boolean>; errors: string[] }; confidence_intervals: Record<string, unknown>[]; asset_results: Record<string, unknown>[]; windows: Record<string, unknown>[]; sensitivity: Record<string, unknown>[]; ablations: Record<string, unknown>[]; benchmarks: Record<string, unknown>[] };
-export type System = { finagent_version: string; database_path: string; database_exists: boolean; database_size_bytes: number; git_revision: string | null; experiment_count: number; configuration_version_count: number; latest_experiment_id: string | null };
+export type System = { finagent_version: string; database_path: string; database_exists: boolean; database_size_bytes: number; git_revision: string | null; experiment_count: number; configuration_version_count: number; latest_experiment_id: string | null; dataset_count: number; latest_dataset_refresh: string | null; data_providers: DataProvider[]; data_quality_warnings: number };
+export type DataProvider = { provider: string; historical_only: boolean; intervals: string[]; requires_credentials: boolean };
+export type DatasetSummary = { dataset_id: string; version_id: string; version_number: number; provider: string; symbol: string; asset_class: string; exchange: string | null; interval: string; start_date: string; end_date: string; row_count: number; checksum: string; created_at: string; last_refreshed_at: string; validation_status: string; quality_score: number };
+export type Dataset = DatasetSummary & { cache_path: string; metadata: Record<string, unknown>; validation: { status: string; issues: { code: string; severity: string; message: string; count: number }[]; quality: { score: number; components: Record<string, number>; suspicious_gap_count: number }; policy: string }; sample_rows: OhlcvRow[]; versions: DatasetSummary[] };
+export type OhlcvRow = { timestamp: string; open: number; high: number; low: number; close: number; volume: number };
+export type DataFetchInput = { provider: string; symbol: string; start_date: string; end_date: string; interval: "1d"; force_refresh: boolean; source_path?: string; asset_class?: string; missing_data_policy?: "reject" | "forward_fill" | "drop" | "warn_only" };
 
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
 
@@ -42,5 +47,11 @@ export const api = {
   report: (id: string) => request<{ experiment_id: string; markdown: string; download_url: string }>(`/api/reports/${id}`),
   configuration: () => request<{ safe_defaults: Record<string, unknown>; capabilities: Record<string, boolean> }>("/api/config"),
   system: () => request<System>("/api/system"),
+  dataProviders: () => request<DataProvider[]>("/api/data/providers"),
+  datasets: (query = "") => request<{ items: DatasetSummary[]; pagination: Pagination }>(`/api/data/datasets${query}`),
+  dataset: (id: string) => request<Dataset>(`/api/data/datasets/${id}`),
+  fetchData: (input: DataFetchInput) => request<{ dataset: DatasetSummary; cache_hit: boolean }>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
+  validateData: (dataset_id: string, missing_data_policy = "reject") => request<DatasetSummary>("/api/data/validate", { method: "POST", body: JSON.stringify({ dataset_id, missing_data_policy }) }),
+  dataCollections: () => request<{ items: { collection_id: string; name: string; description: string | null; members: { dataset_id: string; version_id: string; symbol: string; adjustment_mode: string }[]; created_at: string | null; warnings: string[] }[] }>("/api/data/collections"),
   run: (workflow: "experiments" | "improvements" | "validation", config_path: string) => request(`/api/${workflow}/run`, { method: "POST", body: JSON.stringify({ config_path }) }),
 };

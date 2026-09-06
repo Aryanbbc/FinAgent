@@ -1,4 +1,4 @@
-"""Environment-backed settings for the local-only V0.7 API."""
+"""Environment-backed settings for the local-only V0.8 API."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ class Settings:
     host: str = field(default_factory=lambda: os.getenv("API_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("API_PORT", "8000")))
     cors_origins: tuple[str, ...] = ("http://localhost:3000", "http://127.0.0.1:3000")
+    data_cache_directory: Path | None = None
 
     @property
     def database_path(self) -> Path:
@@ -27,3 +28,10 @@ class Settings:
         path = Path(value)
         return path if path.is_absolute() else self.project_root / path
 
+    @property
+    def data_cache_path(self) -> Path:
+        if self.data_cache_directory is not None:
+            return self.data_cache_directory
+        value = os.getenv("DATA_CACHE_PATH", "data/cache")
+        path = Path(value)
+        return path if path.is_absolute() else self.project_root / path
