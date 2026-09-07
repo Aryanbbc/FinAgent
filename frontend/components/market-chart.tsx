@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ColorType, createChart, type IChartApi, type Time } from "lightweight-charts";
 import type { AgentDecision, OhlcvRow, Trade } from "@/lib/api";
 
@@ -13,6 +13,7 @@ const regimeColor = "#efc66b";
 export function MarketChart({ rows, trades, decisions = [], experimentId, strategy, highlightTimestamp }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const [hovered, setHovered] = useState<OhlcvRow | null>(null);
 
   useEffect(() => {
     if (!container.current || !rows.length) return;
@@ -36,8 +37,15 @@ export function MarketChart({ rows, trades, decisions = [], experimentId, strate
     candles.setMarkers(trades.map((trade) => {
       const decision = decisions.find((item) => item.timestamp.slice(0, 10) === trade.timestamp.slice(0, 10));
       const context = decision ? ` · ${(decision.proposal.confidence * 100).toFixed(0)}% · ${decision.risk.approved ? "risk approved" : "risk rejected"}` : "";
-      return { time: trade.timestamp.slice(0, 10) as Time, position: trade.side === "BUY" ? "belowBar" : "aboveBar", color: trade.side === "BUY" ? "#58d6aa" : "#ff8490", shape: trade.side === "BUY" ? "arrowUp" : "arrowDown", text: `${trade.side} · ${strategy}${context}` };
+      const exit = trade.side === "EXIT";
+      return { time: trade.timestamp.slice(0, 10) as Time, position: trade.side === "BUY" ? "belowBar" : "aboveBar", color: trade.side === "BUY" ? "#58d6aa" : exit ? "#efc66b" : "#ff8490", shape: trade.side === "BUY" ? "arrowUp" : "arrowDown", text: `${trade.side} · ${strategy}${context}` };
     }));
+    const rowsByDate = new Map(rows.map((row) => [row.timestamp.slice(0, 10), row]));
+    chart.subscribeCrosshairMove((event) => {
+      const time = event.time;
+      const key = typeof time === "string" ? time : typeof time === "object" && time && "year" in time ? `${time.year}-${String(time.month).padStart(2, "0")}-${String(time.day).padStart(2, "0")}` : "";
+      setHovered(rowsByDate.get(key) ?? null);
+    });
     chart.timeScale().fitContent();
     if (highlightTimestamp) {
       const selected = rows.find((row) => row.timestamp.slice(0, 10) === highlightTimestamp.slice(0, 10));
@@ -56,8 +64,9 @@ export function MarketChart({ rows, trades, decisions = [], experimentId, strate
   if (!rows.length) return <p className="subtle">No persisted OHLCV rows are available for this experiment.</p>;
   const selected = highlightTimestamp ? trades.find((trade) => trade.timestamp.slice(0, 10) === highlightTimestamp.slice(0, 10)) : undefined;
   const selectedDecision = highlightTimestamp ? decisions.find((item) => item.timestamp.slice(0, 10) === highlightTimestamp.slice(0, 10)) : undefined;
+  const displayed = hovered ?? rows.at(-1);
   return <div className="market-chart-wrap"><div ref={container} className="market-chart" aria-label="Interactive historical candlestick chart" />
-    <div className="chart-caption"><span>Candles · pan, zoom, crosshair, and volume are enabled.</span><span>{trades.length} persisted trade marker{trades.length === 1 ? "" : "s"}</span></div>
+    <div className="chart-caption terminal-chart-caption"><span>Candles · pan, zoom, crosshair, and volume are enabled.</span>{displayed && <span>O {displayed.open.toFixed(2)} · H {displayed.high.toFixed(2)} · L {displayed.low.toFixed(2)} · C <strong>{displayed.close.toFixed(2)}</strong></span>}<span>Last {rows.at(-1)?.close.toFixed(2) ?? "—"} · {trades.length} marker{trades.length === 1 ? "" : "s"}</span></div>
     {selected && <div className="selected-event"><strong>{selected.side}</strong> {selected.timestamp.slice(0, 10)} · {selected.price.toFixed(2)} · {strategy} · {experimentId}{selectedDecision ? ` · ${(selectedDecision.proposal.confidence * 100).toFixed(0)}% · risk ${selectedDecision.risk.approved ? "approved" : "rejected"}` : ""}</div>}
   </div>;
 }

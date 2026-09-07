@@ -1,6 +1,6 @@
 "use client";
 
-import { Bar, BarChart, Brush, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, Brush, CartesianGrid, Cell, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { CurvePoint, RegimeObservation } from "@/lib/api";
 import { drawdownSeries } from "@/lib/terminal";
 
@@ -19,6 +19,7 @@ export function TerminalDrawdownChart({ equity, range, onRangeChange }: { equity
 }
 
 const regimeValue: Record<string, number> = { stress: 5, high_volatility: 4, bear: 3, sideways: 2, bull: 1, low_volatility: 0 };
+const regimeColors: Record<string, string> = { stress: "#e77882", high_volatility: "#d8a85f", bear: "#b66c78", sideways: "#6e829f", bull: "#4dbb95", low_volatility: "#6aaec0" };
 function RegimeTooltip({ active, payload, label }: { active?: boolean; payload?: { payload?: Record<string, unknown> }[]; label?: string }) {
   const item = payload?.[0]?.payload;
   if (!active || !item) return null;
@@ -27,5 +28,5 @@ function RegimeTooltip({ active, payload, label }: { active?: boolean; payload?:
 }
 export function RegimeStrip({ items }: { items: RegimeObservation[] }) {
   const values = items.map((item) => ({ timestamp: item.timestamp.slice(0, 10), regime: item.regime, confidence: item.confidence, value: regimeValue[item.regime] ?? 2, rolling_return: item.rolling_return, rolling_volatility: item.rolling_volatility, moving_average_slope: item.moving_average_slope, momentum: item.momentum, drawdown: item.drawdown }));
-  return <ResponsiveContainer width="100%" height={155}><BarChart data={values} margin={{ left: 8, right: 18, top: 8 }}><XAxis dataKey="timestamp" minTickGap={42} stroke="#8090a8"/><YAxis hide domain={[0, 5]}/><Tooltip content={<RegimeTooltip/>}/><Bar dataKey="value" name="Regime" fill="#efc66b" radius={[2, 2, 0, 0]}/></BarChart></ResponsiveContainer>;
+  return <ResponsiveContainer width="100%" height={155}><BarChart data={values} margin={{ left: 8, right: 18, top: 8 }}><XAxis dataKey="timestamp" minTickGap={42} stroke="#8090a8"/><YAxis hide domain={[0, 5]}/><Tooltip content={<RegimeTooltip/>}/><Bar dataKey="value" name="Regime" radius={[1, 1, 0, 0]}>{values.map((item, index) => <Cell key={`${item.timestamp}-${index}`} fill={regimeColors[item.regime] ?? "#6e829f"}/>)}</Bar></BarChart></ResponsiveContainer>;
 }
