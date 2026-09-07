@@ -24,7 +24,15 @@ export type DataProvider = { provider: string; historical_only: boolean; interva
 export type DatasetSummary = { dataset_id: string; version_id: string; version_number: number; provider: string; symbol: string; asset_class: string; exchange: string | null; interval: string; start_date: string; end_date: string; row_count: number; checksum: string; created_at: string; last_refreshed_at: string; validation_status: string; quality_score: number };
 export type Dataset = DatasetSummary & { cache_path: string; metadata: Record<string, unknown>; validation: { status: string; issues: { code: string; severity: string; message: string; count: number }[]; quality: { score: number; components: Record<string, number>; suspicious_gap_count: number }; policy: string }; sample_rows: OhlcvRow[]; versions: DatasetSummary[] };
 export type OhlcvRow = { timestamp: string; open: number; high: number; low: number; close: number; volume: number };
+export type OhlcvSeries = { dataset_id: string | null; version_id: string | null; items: OhlcvRow[]; downsampled: boolean };
+export type ActivityEvent = { timestamp: string; event_type: string; source: string; artifact_id: string | null; summary: string; metadata: Record<string, unknown> };
 export type DataFetchInput = { provider: string; symbol: string; start_date: string; end_date: string; interval: "1d"; force_refresh: boolean; source_path?: string; asset_class?: string; missing_data_policy?: "reject" | "forward_fill" | "drop" | "warn_only" };
+export type ExperimentRunInput = {
+  config_path: string; dataset_id?: string; strategy_name?: "moving_average" | "momentum" | "mean_reversion";
+  agents_enabled?: boolean; starting_capital?: number; percentage_fee?: number; fixed_fee?: number;
+  position_fraction?: number; risk_max_position_size?: number; risk_max_drawdown?: number;
+  risk_max_volatility?: number; start_date?: string; end_date?: string;
+};
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code = "REQUEST_FAILED", public details?: unknown, public requestId?: string) { super(message); }
@@ -45,7 +53,9 @@ export const api = {
   experiments: (query = "") => request<{ items: ExperimentSummary[]; pagination: Pagination }>(`/api/experiments${query}`),
   experiment: (id: string) => request<Experiment>(`/api/experiments/${id}`),
   trades: (id: string) => request<{ experiment_id: string; items: Trade[] }>(`/api/experiments/${id}/trades`),
-  regimes: (id: string) => request<{ experiment_id: string; distribution: Record<string, number>; items: RegimeObservation[]; best_strategies: Record<string, { experiment_id: string; strategy: string; regime_return: number }[]> }>(`/api/experiments/${id}/regimes`),
+  regimes: (id: string) => request<{ experiment_id: string; distribution: Record<string, number>; items: RegimeObservation[]; best_strategies: Record<string, { experiment_id: string; strategy: string; regime_return: number }[]>; worst_strategies: Record<string, { experiment_id: string; strategy: string; regime_return: number }[]>; strategy_performance: { regime: string; observations: number; compounded_return: number }[] }>(`/api/experiments/${id}/regimes`),
+  experimentMarketData: (id: string, query = "") => request<OhlcvSeries>(`/api/experiments/${id}/market-data${query}`),
+  activity: (query = "") => request<{ items: ActivityEvent[]; pagination: Pagination }>(`/api/experiments/activity/recent${query}`),
   decisions: (id: string, query = "") => request<{ experiment_id: string; items: AgentDecision[]; pagination: Pagination }>(`/api/experiments/${id}/agent-decisions${query}`),
   critique: (id: string) => request<Critique>(`/api/experiments/${id}/critique`),
   versions: () => request<{ items: Version[] }>("/api/versions"),
@@ -59,8 +69,12 @@ export const api = {
   dataProviders: () => request<DataProvider[]>("/api/data/providers"),
   datasets: (query = "") => request<{ items: DatasetSummary[]; pagination: Pagination }>(`/api/data/datasets${query}`),
   dataset: (id: string) => request<Dataset>(`/api/data/datasets/${id}`),
+  datasetOhlcv: (id: string, query = "") => request<OhlcvSeries>(`/api/data/datasets/${id}/ohlcv${query}`),
   fetchData: (input: DataFetchInput) => request<{ dataset: DatasetSummary; cache_hit: boolean }>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
   validateData: (dataset_id: string, missing_data_policy = "reject") => request<DatasetSummary>("/api/data/validate", { method: "POST", body: JSON.stringify({ dataset_id, missing_data_policy }) }),
   dataCollections: (query = "") => request<{ items: { collection_id: string; name: string; description: string | null; members: { dataset_id: string; version_id: string; symbol: string; adjustment_mode: string }[]; created_at: string | null; warnings: string[] }[]; pagination: Pagination }>(`/api/data/collections${query}`),
-  run: (workflow: "experiments" | "improvements" | "validation", config_path: string, dataset_id?: string) => request(`/api/${workflow}/run`, { method: "POST", body: JSON.stringify({ config_path, ...(dataset_id ? { dataset_id } : {}) }) }),
+  run: (workflow: "experiments" | "improvements" | "validation", input: string | ExperimentRunInput, dataset_id?: string) => {
+    const payload = typeof input === "string" ? { config_path: input, ...(dataset_id ? { dataset_id } : {}) } : input;
+    return request(`/api/${workflow}/run`, { method: "POST", body: JSON.stringify(payload) });
+  },
 };

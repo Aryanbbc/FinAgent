@@ -14,6 +14,7 @@ from finagent.api.schemas import (
     DatasetDetail,
     DatasetListResponse,
     DatasetSummary,
+    OhlcvSeriesResponse,
     PaginationMeta,
 )
 from finagent.services.research_service import ResearchService
@@ -35,6 +36,18 @@ def datasets(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
 @router.get("/datasets/{dataset_id}", response_model=DatasetDetail)
 def dataset(dataset_id: str, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return service.data_dataset(dataset_id)
+
+
+@router.get("/datasets/{dataset_id}/ohlcv", response_model=OhlcvSeriesResponse)
+def ohlcv(
+    dataset_id: str,
+    start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    end_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    limit: int = Query(default=1200, ge=2, le=5000),
+    service: ResearchService = Depends(get_service),
+) -> dict[str, object]:
+    """Bound a persisted OHLCV response for responsive terminal charts."""
+    return service.data_ohlcv(dataset_id, start_date=start_date, end_date=end_date, limit=limit)
 
 
 @router.post("/fetch", response_model=DataFetchResponse)

@@ -103,6 +103,8 @@ class RegimesResponse(APIModel):
     distribution: dict[str, int]
     items: list[RegimeObservation]
     best_strategies: dict[str, list[dict[str, Any]]]
+    worst_strategies: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    strategy_performance: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AgentDecision(APIModel):
@@ -269,6 +271,31 @@ class DatasetDetail(DatasetSummary):
     versions: list[DatasetSummary]
 
 
+class OhlcvSeriesResponse(APIModel):
+    """A bounded chronological OHLCV series for the terminal charts."""
+
+    dataset_id: str | None = None
+    version_id: str | None = None
+    items: list[dict[str, Any]]
+    downsampled: bool = False
+
+
+class ActivityEvent(APIModel):
+    """Safe, persisted-evidence activity suitable for the research terminal."""
+
+    timestamp: str
+    event_type: str
+    source: str
+    artifact_id: str | None = None
+    summary: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActivityResponse(APIModel):
+    items: list[ActivityEvent]
+    pagination: PaginationMeta
+
+
 class DataFetchRequest(APIModel):
     provider: str = Field(min_length=3, max_length=40, pattern=r"^[a-z0-9_]+$")
     symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._^=-]+$")
@@ -313,6 +340,20 @@ class RunRequest(APIModel):
         pattern=r"^config/[A-Za-z0-9_./-]+\.ya?ml$",
     )
     dataset_id: str | None = Field(default=None, min_length=6, max_length=120, pattern=r"^DATA-[A-Z0-9-]+$")
+    # These optional controls are deliberately bounded projections of the
+    # existing YAML configuration. They never enable execution or alter the
+    # strategy/agent implementations.
+    strategy_name: Literal["moving_average", "momentum", "mean_reversion"] | None = None
+    agents_enabled: bool | None = None
+    starting_capital: float | None = Field(default=None, gt=0, le=1_000_000_000)
+    percentage_fee: float | None = Field(default=None, ge=0, le=0.1)
+    fixed_fee: float | None = Field(default=None, ge=0, le=100_000)
+    position_fraction: float | None = Field(default=None, gt=0, le=1)
+    risk_max_position_size: float | None = Field(default=None, gt=0, le=1)
+    risk_max_drawdown: float | None = Field(default=None, gt=0, lt=1)
+    risk_max_volatility: float | None = Field(default=None, gt=0, le=5)
+    start_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 class ExecutionResponse(APIModel):

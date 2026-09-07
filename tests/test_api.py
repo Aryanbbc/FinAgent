@@ -96,6 +96,8 @@ def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestCl
     assert api.get("/api/data/datasets").json()["pagination"]["total"] == 1
     detail = api.get(f"/api/data/datasets/{dataset_id}")
     assert detail.status_code == 200 and detail.json()["sample_rows"]
+    series = api.get(f"/api/data/datasets/{dataset_id}/ohlcv?limit=20")
+    assert series.status_code == 200 and 0 < len(series.json()["items"]) <= 20
     assert api.post("/api/data/validate", json={"dataset_id": dataset_id}).status_code == 200
     # Controlled API runs bind to Settings.DATABASE_URL and can select durable
     # registry data instead of relying on a YAML-configured local CSV path.
@@ -103,3 +105,33 @@ def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestCl
     assert run.status_code == 200
     assert run.json()["metadata"]["dataset_id"] == dataset_id
     assert api.get(f"/api/experiments/{run.json()['experiment_id']}").status_code == 200
+
+
+def test_terminal_read_endpoints_use_persisted_market_and_activity_data(client: tuple[TestClient, str, str]) -> None:
+    """The terminal receives bounded canonical data without recomputing research."""
+    api, experiment_id, _ = client
+    market = api.get(f"/api/experiments/{experiment_id}/market-data?limit=50")
+    assert market.status_code == 200
+    assert market.json()["items"]
+    assert len(market.json()["items"]) <= 50
+    activity = api.get("/api/experiments/activity/recent?limit=100")
+    assert activity.status_code == 200
+    types = {item["event_type"] for item in activity.json()["items"]}
+    assert {"EXPERIMENT_COMPLETED", "TRADE_SIMULATED", "SIGNAL_CREATED"} <= types
+
+
+def test_controlled_terminal_run_overrides_are_bounded_and_recorded(client: tuple[TestClient, str, str]) -> None:
+    api, _, _ = client
+    response = api.post(
+        "/api/experiments/run",
+        json={
+            "config_path": "config/experiments.yaml", "strategy_name": "moving_average", "agents_enabled": False,
+            "starting_capital": 125000, "percentage_fee": 0.002, "fixed_fee": 2.0,
+            "position_fraction": 0.5, "start_date": "2024-01-10", "end_date": "2024-03-01",
+        },
+    )
+    assert response.status_code == 200
+    detail = api.get(f"/api/experiments/{response.json()['experiment_id']}").json()
+    assert detail["strategy"] == "moving_average"
+    assert detail["starting_capital"] == 125000
+    assert detail["start_date"] >= "2024-01-10"

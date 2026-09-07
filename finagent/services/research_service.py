@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import logging
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import yaml
 from finagent import __version__
 from finagent.api.settings import Settings
 from finagent.configuration import validate_research_configuration
+from finagent.data.loader import CSVDataLoader
 from finagent.data.manager import DatasetManager
 from finagent.data.models import MarketDataRequest, MissingDataPolicy
 from finagent.data.registry import DatasetRegistry
@@ -129,9 +131,20 @@ class ResearchService:
         items = [{key: self._clean(value) for key, value in row.items()} for row in frame.to_dict(orient="records")]
         distribution = {str(key): int(value) for key, value in frame["regime"].value_counts().items()} if not frame.empty else {}
         best: dict[str, list[dict[str, Any]]] = {}
+        worst: dict[str, list[dict[str, Any]]] = {}
         for regime in distribution:
             best[regime] = [item.__dict__ for item in self.repository.best_performing_strategy_by_regime(regime, limit=3)]
-        return {"experiment_id": record.experiment_id, "distribution": distribution, "items": items, "best_strategies": best}
+            worst[regime] = [item.__dict__ for item in self.repository.worst_performing_strategy_by_regime(regime, limit=3)]
+        memory = self.repository.get_experiment_memory(experiment_id)
+        performance = [item.to_dict() for item in memory.regime_performance] if memory else []
+        return {
+            "experiment_id": record.experiment_id,
+            "distribution": distribution,
+            "items": items,
+            "best_strategies": best,
+            "worst_strategies": worst,
+            "strategy_performance": performance,
+        }
 
     def agent_decisions(self, experiment_id: str, limit: int = 100, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
         self._require_experiment(experiment_id)
@@ -328,6 +341,178 @@ class ResearchService:
         })
         return payload
 
+    def _bounded_ohlcv(
+        self,
+        frame: pd.DataFrame,
+        *,
+        dataset_id: str | None,
+        version_id: str | None,
+        start_date: str | None,
+        end_date: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Filter and deterministically downsample an existing chronological series.
+
+        This is a presentation concern only: the stored immutable OHLCV data is
+        never altered, and the returned final observation is retained.
+        """
+        values = frame.copy()
+        values["timestamp"] = pd.to_datetime(values["timestamp"], utc=True)
+        if start_date:
+            values = values.loc[values["timestamp"] >= pd.Timestamp(start_date, tz="UTC")]
+        if end_date:
+            values = values.loc[values["timestamp"] < pd.Timestamp(end_date, tz="UTC") + pd.Timedelta(days=1)]
+        values = values.sort_values("timestamp", kind="stable")
+        downsampled = len(values) > limit
+        if downsampled:
+            # Evenly spaced indices preserve chronology and both visual bounds.
+            indexes = sorted({round(index * (len(values) - 1) / (limit - 1)) for index in range(limit)})
+            values = values.iloc[indexes]
+        return {
+            "dataset_id": dataset_id,
+            "version_id": version_id,
+            "items": [
+                {key: self._clean(value) for key, value in row.items()}
+                for row in values.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].to_dict(orient="records")
+            ],
+            "downsampled": downsampled,
+        }
+
+    def data_ohlcv(
+        self,
+        dataset_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 1200,
+    ) -> dict[str, Any]:
+        """Return persisted canonical OHLCV safely bounded for terminal charts."""
+        dataset = self.dataset_registry.latest(dataset_id)
+        frame = (
+            self.dataset_registry.load_ohlcv(dataset.version_id)
+            if self.dataset_registry.has_ohlcv(dataset.version_id)
+            else CSVDataLoader().load(dataset.cache_path)
+        )
+        return self._bounded_ohlcv(
+            frame,
+            dataset_id=dataset.dataset_id,
+            version_id=dataset.version_id,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+
+    def experiment_market_data(
+        self,
+        experiment_id: str,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 1200,
+    ) -> dict[str, Any]:
+        """Resolve the actual dataset used by a persisted experiment, not a proxy."""
+        record = self._require_experiment(experiment_id)
+        provenance = record.results.get("dataset_provenance") or {}
+        experiment_config = record.configuration.get("experiment", {})
+        dataset_id = provenance.get("dataset_id") or experiment_config.get("dataset_id")
+        if dataset_id:
+            return self.data_ohlcv(str(dataset_id), start_date=start_date, end_date=end_date, limit=limit)
+        path = Path(record.dataset)
+        if not path.is_absolute():
+            path = self.settings.project_root / path
+        path = path.resolve()
+        if not path.is_relative_to(self.settings.project_root.resolve()) or not path.is_file():
+            raise NotFoundError(f"Market data not available for experiment: {experiment_id}")
+        return self._bounded_ohlcv(
+            CSVDataLoader().load(path),
+            dataset_id=None,
+            version_id=None,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+
+    def activity(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        event_type: str | None = None,
+        source: str | None = None,
+        search: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Build a safe activity feed from persisted research evidence only.
+
+        The feed intentionally does not expose request bodies, credentials,
+        stack traces, or inferred internal reasoning.  Simulation timestamps
+        remain historical market timestamps; lifecycle events use their stored
+        artifact creation timestamps.
+        """
+        events: list[dict[str, Any]] = []
+        with self.database.connect() as connection:
+            datasets = connection.execute(
+                "SELECT dataset_id, version_id, symbol, provider, created_at, last_refreshed_at, validation_json "
+                "FROM dataset_versions ORDER BY created_at DESC LIMIT 200"
+            ).fetchall()
+            experiments = connection.execute(
+                "SELECT experiment_id, created_at, strategy, asset FROM experiments ORDER BY created_at DESC LIMIT 200"
+            ).fetchall()
+            trades = connection.execute(
+                "SELECT experiment_id, timestamp, side, price FROM trades ORDER BY id DESC LIMIT 300"
+            ).fetchall()
+            decisions = connection.execute(
+                "SELECT experiment_id, timestamp, execution_action, risk_approved, risk_reason_code "
+                "FROM agent_decisions ORDER BY id DESC LIMIT 300"
+            ).fetchall()
+            critiques = connection.execute(
+                "SELECT experiment_id, created_at, confidence FROM critiques ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+            candidates = connection.execute(
+                "SELECT candidate_id, parent_version_id, created_at FROM candidate_configurations ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+            promotions = connection.execute(
+                "SELECT candidate_id, parent_version_id, created_at, status, reason_codes_json FROM candidate_evaluations "
+                "ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+            validations = connection.execute(
+                "SELECT validation_id, experiment_id, created_at FROM research_validations ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+
+        for item in datasets:
+            metadata = {"dataset_id": item["dataset_id"], "version_id": item["version_id"], "provider": item["provider"]}
+            events.append({"timestamp": item["created_at"], "event_type": "DATA_FETCH", "source": "dataset_registry", "artifact_id": item["dataset_id"], "summary": f"{item['symbol']} historical dataset registered", "metadata": metadata})
+            validation = json.loads(item["validation_json"])
+            events.append({"timestamp": item["last_refreshed_at"], "event_type": "DATA_VALIDATED", "source": "data_quality", "artifact_id": item["dataset_id"], "summary": f"{item['symbol']} validation: {validation.get('status', 'unknown')}", "metadata": {**metadata, "quality_score": validation.get("quality", {}).get("score")}})
+        for item in experiments:
+            events.append({"timestamp": item["created_at"], "event_type": "EXPERIMENT_COMPLETED", "source": "runner", "artifact_id": item["experiment_id"], "summary": f"{item['strategy']} simulation completed for {item['asset']}", "metadata": {"strategy": item["strategy"], "asset": item["asset"]}})
+        for item in trades:
+            events.append({"timestamp": item["timestamp"], "event_type": "TRADE_SIMULATED", "source": "backtester", "artifact_id": item["experiment_id"], "summary": f"{item['side']} simulated at {float(item['price']):.2f}", "metadata": {"side": item["side"], "price": float(item["price"])}})
+        for item in decisions:
+            metadata = {"action": item["execution_action"], "risk_reason_code": item["risk_reason_code"]}
+            events.append({"timestamp": item["timestamp"], "event_type": "SIGNAL_CREATED", "source": "agent_decision_system", "artifact_id": item["experiment_id"], "summary": f"Agent execution action: {item['execution_action']}", "metadata": metadata})
+            if not bool(item["risk_approved"]):
+                events.append({"timestamp": item["timestamp"], "event_type": "RISK_REJECTED", "source": "risk_agent", "artifact_id": item["experiment_id"], "summary": f"Risk proposal rejected: {item['risk_reason_code']}", "metadata": metadata})
+        for item in critiques:
+            events.append({"timestamp": item["created_at"], "event_type": "CRITIQUE_GENERATED", "source": "critic_agent", "artifact_id": item["experiment_id"], "summary": f"Deterministic critique generated (confidence {float(item['confidence']):.2f})", "metadata": {"confidence": float(item["confidence"])}})
+        for item in candidates:
+            events.append({"timestamp": item["created_at"], "event_type": "CANDIDATE_CREATED", "source": "learning_workflow", "artifact_id": item["candidate_id"], "summary": f"Candidate created from {item['parent_version_id']}", "metadata": {"parent_version_id": item["parent_version_id"]}})
+        for item in promotions:
+            status = str(item["status"])
+            event = "CANDIDATE_PROMOTED" if status == "PROMOTED" else "CANDIDATE_REJECTED"
+            events.append({"timestamp": item["created_at"], "event_type": event, "source": "promotion_gate", "artifact_id": item["candidate_id"], "summary": f"Candidate {status.lower()} by the deterministic promotion gate", "metadata": {"parent_version_id": item["parent_version_id"], "reason_codes": json.loads(item["reason_codes_json"])}})
+        for item in validations:
+            events.append({"timestamp": item["created_at"], "event_type": "VALIDATION_COMPLETED", "source": "validation_workflow", "artifact_id": item["validation_id"], "summary": f"Research validation completed for {item['experiment_id']}", "metadata": {"experiment_id": item["experiment_id"]}})
+
+        needle = search.lower().strip() if search else None
+        filtered = [
+            item for item in events
+            if (not event_type or item["event_type"] == event_type)
+            and (not source or item["source"] == source)
+            and (not needle or needle in " ".join([item["event_type"], item["source"], item["artifact_id"] or "", item["summary"]]).lower())
+        ]
+        filtered.sort(key=lambda item: str(item["timestamp"]), reverse=True)
+        return filtered[offset:offset + limit], len(filtered)
+
     def fetch_data(self, raw: dict[str, Any]) -> dict[str, Any]:
         source_path = raw.get("source_path")
         if source_path:
@@ -371,11 +556,49 @@ class ResearchService:
             raise InvalidConfigurationError("config_path must contain a YAML mapping")
         return str(path)
 
-    def run_experiment(self, config_path: str, dataset_id: str | None = None) -> dict[str, Any]:
+    def run_experiment(self, config_path: str, request: Mapping[str, Any] | None = None) -> dict[str, Any]:
         path = self._config_path(config_path)
         configuration = load_configuration(path, self.settings.project_root)
         if not isinstance(configuration.get("experiment"), Mapping) or not isinstance(configuration.get("strategy"), Mapping):
             raise InvalidConfigurationError("experiment configuration requires experiment and strategy mappings")
+        raw = dict(request or {})
+        dataset_id = raw.get("dataset_id")
+        start_date, end_date = raw.get("start_date"), raw.get("end_date")
+        if start_date and end_date and str(start_date) > str(end_date):
+            raise InvalidConfigurationError("start_date must be on or before end_date")
+        overrides: dict[str, Any] = {}
+        experiment_overrides = {key: raw[key] for key in ("dataset_id", "starting_capital", "start_date", "end_date") if key in raw}
+        strategy_overrides: dict[str, Any] = {}
+        if raw.get("strategy_name"):
+            selected_strategy = str(raw["strategy_name"])
+            # Each baseline constructor has a different parameter contract.
+            # Reuse the already validated default allowlist rather than carry
+            # momentum parameters into a moving-average or mean-reversion run.
+            available = configuration.get("agents", {}).get("strategy", {}).get("available_strategies", {})
+            strategy_overrides = {"name": selected_strategy, "parameters": dict(available.get(selected_strategy, {}))}
+        backtest_values = {key: raw[key] for key in ("position_fraction",) if key in raw}
+        cost_values = {key: raw[key] for key in ("percentage_fee", "fixed_fee") if key in raw}
+        if cost_values:
+            backtest_values["transaction_costs"] = cost_values
+        agent_values: dict[str, Any] = {}
+        if "agents_enabled" in raw:
+            agent_values["enabled"] = raw["agents_enabled"]
+        risk_values = {
+            "max_position_size": raw.get("risk_max_position_size"),
+            "max_drawdown": raw.get("risk_max_drawdown"),
+            "max_volatility": raw.get("risk_max_volatility"),
+        }
+        risk_values = {key: value for key, value in risk_values.items() if value is not None}
+        if risk_values:
+            agent_values["risk"] = risk_values
+        if experiment_overrides:
+            overrides["experiment"] = experiment_overrides
+        if strategy_overrides:
+            overrides["strategy"] = strategy_overrides
+        if backtest_values:
+            overrides["backtest"] = backtest_values
+        if agent_values:
+            overrides["agents"] = agent_values
         log_event(self.logger, "EXPERIMENT_RUN_STARTED", workflow="experiment")
         if dataset_id:
             self.dataset_registry.latest(dataset_id)
@@ -384,7 +607,7 @@ class ResearchService:
             self.settings.project_root,
             self.logger,
             database_url=self.settings.database_url,
-            configuration_overrides={"experiment": {"dataset_id": dataset_id}} if dataset_id else None,
+            configuration_overrides=overrides or None,
         )
         log_event(self.logger, "EXPERIMENT_RUN_COMPLETED", workflow="experiment", artifact_id=experiment_id)
         return {"workflow": "experiment", "status": "completed", "experiment_id": experiment_id, "run_id": None, "validation_id": None, "metadata": {"trade_count": result["metrics"].get("number_of_trades"), "critic_enabled": result.get("critique", {}).get("enabled", False), "dataset_id": dataset_id}}

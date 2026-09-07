@@ -35,7 +35,12 @@ from finagent.validation.models import AssetValidationResult, MetricSnapshot
 
 def _deep_merge(base: dict[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in update.items():
-        if isinstance(value, Mapping) and isinstance(base.get(key), dict):
+        # Strategy parameters are a constructor contract, not an additive
+        # settings map. Replacing a baseline strategy must not retain keyword
+        # arguments belonging to the previously selected strategy.
+        if key == "parameters" and isinstance(value, Mapping):
+            base[key] = copy.deepcopy(value)
+        elif isinstance(value, Mapping) and isinstance(base.get(key), dict):
             _deep_merge(base[key], value)
         else:
             base[key] = copy.deepcopy(value)
@@ -189,6 +194,25 @@ def run_experiment(
         if dataset_id and dataset_registry.has_ohlcv(dataset_record.version_id)
         else CSVDataLoader().load(dataset_path)
     )
+    # API callers may select a historical evaluation interval.  The filter is
+    # applied before feature creation and the chronological backtest, so it
+    # never introduces future observations into the selected experiment.
+    selected_start = experiment_config.get("start_date")
+    selected_end = experiment_config.get("end_date")
+    if selected_start or selected_end:
+        timestamps = pd.to_datetime(market_data["timestamp"], utc=True)
+        if selected_start:
+            market_data = market_data.loc[timestamps >= pd.Timestamp(str(selected_start), tz="UTC")].copy()
+            timestamps = pd.to_datetime(market_data["timestamp"], utc=True)
+        if selected_end:
+            market_data = market_data.loc[timestamps < pd.Timestamp(str(selected_end), tz="UTC") + pd.Timedelta(days=1)].copy()
+        if market_data.empty:
+            raise ValueError("The selected date range contains no historical observations")
+        if dataset_provenance is not None:
+            dataset_provenance["selected_date_range"] = {
+                "start": str(market_data["timestamp"].iloc[0].date()),
+                "end": str(market_data["timestamp"].iloc[-1].date()),
+            }
     if logger:
         logger.info("event=DATA_LOADED rows=%s dataset=%s", len(market_data), dataset_path)
     featured_data = FeaturePipeline(int(backtest_config.get("annualization_factor", 252))).generate(

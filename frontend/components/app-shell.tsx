@@ -7,7 +7,7 @@ import { GlobalStatus } from "@/components/global-status";
 
 const navigation = [
   ["Dashboard", "/"], ["Data", "/data"], ["Experiments", "/experiments"], ["Agents", "/agents"], ["Market Regimes", "/regimes"],
-  ["Self-Improvement", "/improvements"], ["Validation", "/validation"], ["Reports", "/reports"], ["System", "/system"],
+  ["Self-Improvement", "/improvements"], ["Validation", "/validation"], ["Activity", "/activity"], ["Reports", "/reports"], ["System", "/system"],
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
