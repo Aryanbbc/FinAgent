@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a configured FinAgent V0.6 historical experiment."""
+"""Run a configured FinAgent 1.0.0 historical experiment."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _decimal(value: Any) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a FinAgent V0.6 experiment")
+    parser = argparse.ArgumentParser(description="Run a FinAgent 1.0.0 experiment")
     parser.add_argument("--config", default="config/experiments.yaml", help="Path to experiment YAML configuration")
     arguments = parser.parse_args()
 
@@ -37,7 +37,7 @@ def main() -> int:
     dataset_timestamps = results["equity_curve"]
 
     print("\n========================================")
-    print("\n               FINAGENT V0.6\n")
+    print("\n              FINAGENT V1.0.0\n")
     print("========================================\n")
     print(f"Experiment:         {experiment_id}")
     print(f"Strategy:           {configuration['strategy']['name']}")

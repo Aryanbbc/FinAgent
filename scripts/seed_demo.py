@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a clearly marked, idempotent local V0.9 demonstration database."""
+"""Create a clearly marked, idempotent local FinAgent 1.0.0 demonstration database."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from finagent.validation.report import ResearchReportExporter  # noqa: E402
 from finagent.validation.workflow import run_research_validation  # noqa: E402
 
 
-DATABASE_PATH = PROJECT_ROOT / "data" / "demo" / "finagent_demo.db"
+DATABASE_PATH = PROJECT_ROOT / "data" / "demo" / "finagent_v1_demo.db"
 
 
 def main() -> int:

@@ -35,7 +35,7 @@ class InvalidConfigurationError(ValueError):
 
 
 class ResearchService:
-    """Maps V0.1–V0.8 records into API-safe structures and runs existing local workflows."""
+    """Maps V0.1–V0.9 records into API-safe structures and runs existing local workflows."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -285,8 +285,8 @@ class ResearchService:
             "latest_dataset_refresh": latest_dataset.last_refreshed_at if latest_dataset else None, "data_providers": self.dataset_manager.providers.describe(),
             "data_quality_warnings": warnings, "database_status": health["status"], "database_integrity": health.get("integrity_check"),
             "latest_experiment_at": latest.created_at if latest else None, "latest_validation_at": self.repository.latest_validation_created_at(),
-            "last_successful_run": latest.created_at if latest else None, "frontend_version": "0.9.0",
-            "enabled_modules": ["V0.1 backtesting", "V0.2 regimes", "V0.3 agents", "V0.4 critique", "V0.5 controlled improvement", "V0.6 validation", "V0.8 data registry"],
+            "last_successful_run": latest.created_at if latest else None, "frontend_version": __version__,
+            "enabled_modules": ["V0.1 backtesting", "V0.2 regimes", "V0.3 agents", "V0.4 critique", "V0.5 controlled improvement", "V0.6 validation", "V0.8 data registry", "V0.9 operations", "V1.0 release suite"],
             "demo_mode": demo is not None,
         }
 

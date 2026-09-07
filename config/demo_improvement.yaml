@@ -1,6 +1,6 @@
 # Demo-only deterministic V0.5 evaluation; it cannot alter a trading system.
 source_experiment_config: config/demo.yaml
-database_path: data/demo/finagent_demo.db
+database_path: data/demo/finagent_v1_demo.db
 
 learning:
   enabled: true

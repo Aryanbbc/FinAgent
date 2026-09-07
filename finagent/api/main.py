@@ -25,7 +25,7 @@ from finagent.utils.logging import configure_logging, log_event
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime = settings or Settings()
     logger = configure_logging()
-    app = FastAPI(title="FinAgent Research API", version="0.9.0", description="Historical research, dataset management, and controlled V0.1–V0.8 workflow access. No trading execution is available.")
+    app = FastAPI(title="FinAgent Research API", version="1.0.0", description="Deterministic historical research, dataset management, and controlled V0.1–V0.9 workflow access. No trading execution is available.")
     app.state.research_service = ResearchService(runtime)
     app.add_middleware(
         CORSMiddleware,

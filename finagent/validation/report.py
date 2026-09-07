@@ -69,7 +69,7 @@ class ResearchReportExporter:
         if validation is not None:
             lines.extend(self._validation_sections(validation))
         else:
-            lines.extend(["", "## Research Validation", "", "No V0.6 validation suite is attached to this experiment."])
+            lines.extend(["", "## Research Validation", "", "No research-validation suite is attached to this experiment."])
         lines.extend(["", "## Reproducibility Manifest", "", "```json", json.dumps(manifest or {}, indent=2, sort_keys=True), "```"])
         history = self.repository.configuration_version_history()
         lines.extend(["", "## Self-Improvement History", "", "| Version | Parent | Candidate | Status |", "|---|---|---|---|"])
@@ -82,7 +82,7 @@ class ResearchReportExporter:
                 "- All results are historical simulations and do not establish future performance or investment suitability.",
                 "- Bootstrap intervals are estimated from observed returns; they do not account for regime changes, dependence, or model uncertainty.",
                 "- Robustness is a transparent heuristic score, not a statistical proof of generalization.",
-                "- V0.6 remains local, deterministic, and research-only: no LLMs, live data, paper trading, or brokerage execution.",
+                "- FinAgent remains local, deterministic, and research-only: no LLMs, live data, paper trading, or brokerage execution.",
             ]
         )
         return "\n".join(lines) + "\n"
@@ -132,13 +132,13 @@ class ResearchReportExporter:
                 for item in validation.ablations
             ] or ["| Not configured | | | | | | | |"]
         )
-        lines.extend(["", "### Benchmark Suite", "", "| Asset | Benchmark | Return | Sharpe | Max drawdown |", "|---|---|---:|---:|---:|"])
+        lines.extend(["", "### Benchmark Suite", "", "| Asset | Benchmark | Status | Return | Sharpe | Max drawdown |", "|---|---|---|---:|---:|---:|"])
         lines.extend(
             [
-                f"| {item.asset} | {item.benchmark} | {_pct(item.metrics.total_return)} | "
+                f"| {item.asset} | {item.benchmark} | {'available' if item.available else item.unavailable_reason or 'unavailable'} | {_pct(item.metrics.total_return)} | "
                 f"{_number(item.metrics.sharpe_ratio)} | {_pct(item.metrics.maximum_drawdown)} |"
                 for item in validation.benchmarks
-            ] or ["| Not configured | | | |"]
+            ] or ["| Not configured | | | | |"]
         )
         return lines
 

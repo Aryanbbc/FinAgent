@@ -1,6 +1,6 @@
 # FinAgent implementation guardrails
 
-This repository is currently at **V0.9: Production Polish**.
+This repository is currently at **V1.0.0: Final Research Release**.
 
 - Keep the platform a local historical-data research and simulation tool.
 - Preserve reproducibility, no-look-ahead-bias safeguards, configurable costs, and deterministic tests.
@@ -17,5 +17,5 @@ This repository is currently at **V0.9: Production Polish**.
 - Do not add LLMs, reinforcement learning, sentiment analysis, unrestricted self-improvement, Bayesian/evolutionary optimization, code rewriting, or live/paper trading integrations.
 - Do not add real-money execution or commit credentials. `LIVE_TRADING_ENABLED` must remain false.
 - Prefer small, modular, configuration-driven Python components and run relevant pytest tests after changes.
-- Keep V0.9 as a reliability/usability release: structured API errors, bounded queries, safe SQLite maintenance, demo data, and explicit Render/Vercel deployment wiring must not change research or execution behavior.
+- Keep V1.0.0 as a final research release: the fixed benchmark suite, release evidence exports, reproducibility documentation, demo data, and explicit Render/Vercel deployment wiring must not change research or execution behavior.
 - Public deployment may expose historical research only through explicit CORS origins and persistent local SQLite storage. Do not add trading behavior, brokers, authentication, or credentials.

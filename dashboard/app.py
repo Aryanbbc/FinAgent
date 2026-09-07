@@ -1,4 +1,4 @@
-"""Legacy/debug Streamlit dashboard for persisted FinAgent V0.1–V0.6 records."""
+"""Legacy/debug Streamlit dashboard for persisted FinAgent V1.0.0 records."""
 
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ def _format_decimal(value: object) -> str:
 
 
 def main() -> None:
-    st.set_page_config(page_title="FinAgent Legacy / Debug", layout="wide")
-    st.title("FinAgent Legacy / Debug Dashboard")
-    st.caption("Historical quantitative research and simulation — not live trading. The V0.8 Next.js workspace is the primary interface.")
+    st.set_page_config(page_title="FinAgent 1.0.0 Legacy / Debug", layout="wide")
+    st.title("FinAgent 1.0.0 Legacy / Debug Dashboard")
+    st.caption("Historical quantitative research and simulation — not live trading. The V1.0.0 Next.js workspace is the primary interface.")
     database_path = st.sidebar.text_input("SQLite database", value=str(PROJECT_ROOT / "data" / "finagent.db"))
     repository = ExperimentRepository(Database(database_path))
     experiment = repository.latest_experiment()

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="770" height="360" viewBox="0 0 770 360" role="img" aria-label="Cross-asset benchmark total returns">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="30" y="34" font-family="Arial, sans-serif" font-size="18" font-weight="700">FinAgent V1.0 benchmark total returns</text>
+<line x1="40" x2="746" y1="185" y2="185" stroke="#475569" stroke-width="1"/>
+<rect x="52.0" y="55.0" width="79" height="130.0" fill="#0f766e" rx="2"/>
+<text x="91.5" y="48.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">6.99%</text>
+<text x="91.5" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 91.5 336)">buy and hold</text>
+<rect x="149.1" y="177.5" width="79" height="7.5" fill="#0f766e" rx="2"/>
+<text x="188.6" y="170.5" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">0.40%</text>
+<text x="188.6" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 188.6 336)">moving average</text>
+<rect x="246.3" y="173.2" width="79" height="11.8" fill="#0f766e" rx="2"/>
+<text x="285.8" y="166.2" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">0.64%</text>
+<text x="285.8" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 285.8 336)">momentum</text>
+<rect x="343.4" y="118.1" width="79" height="66.9" fill="#0f766e" rx="2"/>
+<text x="382.9" y="111.1" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">3.60%</text>
+<text x="382.9" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 382.9 336)">mean reversion</text>
+<rect x="440.6" y="173.2" width="79" height="11.8" fill="#0f766e" rx="2"/>
+<text x="480.1" y="166.2" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">0.64%</text>
+<text x="480.1" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 480.1 336)">regime aware finagent</text>
+<rect x="537.7" y="185.0" width="79" height="6.3" fill="#b91c1c" rx="2"/>
+<text x="577.2" y="207.3" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-0.34%</text>
+<text x="577.2" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 577.2 336)">multi agent finagent</text>
+<rect x="634.9" y="185.0" width="79" height="6.3" fill="#b91c1c" rx="2"/>
+<text x="674.4" y="207.3" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-0.34%</text>
+<text x="674.4" y="336" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" transform="rotate(-28 674.4 336)">critic memory finagent</text>
+<text x="30" y="330" font-family="Arial, sans-serif" font-size="11" fill="#475569">Equal-weight average across the configured bundled assets. Historical simulation only.</text>
+</svg>

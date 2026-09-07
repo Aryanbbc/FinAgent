@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a persisted FinAgent experiment and optional V0.6 evidence as Markdown."""
+"""Export a persisted FinAgent experiment and optional validation evidence as Markdown."""
 
 from __future__ import annotations
 

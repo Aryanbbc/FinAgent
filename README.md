@@ -1,8 +1,8 @@
 # FinAgent
 
-FinAgent is a local, reproducible research workspace for testing deterministic technical strategies on historical OHLCV data. It combines a Python research engine with a FastAPI service and a polished Next.js interface. It is deliberately not a broker, signal service, live-trading product, or financial-advice tool.
+FinAgent is a reproducible historical-research workspace for testing deterministic technical strategies on OHLCV data. It combines a Python research engine with a FastAPI service and a Next.js interface. It is deliberately not a broker, signal service, live-trading product, or financial-advice tool.
 
-**V0.9 — Production Polish** improves the local experience: standardized API errors, operational health information, filters/pagination, quality-focused data views, demo data, safe maintenance tools, and a responsive research UI. The core research architecture remains unchanged.
+**V1.0.0 — Final Research Release** packages the established V0.1–V0.9 engine with a fixed, reproducible final evaluation suite, exported tables/chart, public-release documentation, and a verified demo. The research logic remains deterministic and unchanged.
 
 ## What problem it addresses
 
@@ -19,6 +19,7 @@ Historical strategy research is easy to make irreproducible: data can change, co
 - Next.js research workspace with dashboard, explorer, data quality, charts, reports, errors/empty/loading states, and responsive navigation.
 - Demo seed, environment check, safe SQLite health/backup/export commands, and one-command local startup.
 - Deployment-ready FastAPI binding, explicit CORS origins, Render Blueprint, Vercel environment wiring, and persistent-disk documentation.
+- Fixed V1.0 release validation: two bundled fixtures, causal multi-asset walk-forward evaluation, leakage checks, sensitivity, bootstrap intervals, ablation, an explicit benchmark suite, and portable CSV/SVG/Markdown/JSON exports.
 
 ## Screenshots
 
@@ -29,7 +30,7 @@ The interface is intended to be read like a research notebook rather than a trad
 - **Data:** provider, quality score, warnings, checksum, adjustment metadata, coverage, and immutable revisions.
 - **Validation:** multi-asset, walk-forward, sensitivity, and robustness evidence.
 
-Run demo mode below to populate representative local views.
+Run demo mode below to populate representative local views. The bundled fixtures are short deterministic release fixtures, not representative market histories or performance evidence.
 
 ## Quick start
 
@@ -88,6 +89,18 @@ Run explicit V0.6 validation or V0.5 controlled candidate evaluation only when c
 .venv/bin/python scripts/run_improvement.py --config config/improvement.yaml
 ```
 
+## V1.0 reference evaluation
+
+The final reference suite is intentionally separate from normal local research data. It evaluates the two bundled fixtures with transaction costs, causal multi-agent decisions, critic/memory evidence, rolling walk-forward splits, leakage checks, sensitivity, bootstrap confidence intervals, ablation, and the fixed benchmark set. It never promotes or invents a self-improved configuration.
+
+```bash
+.venv/bin/python scripts/run_validation.py --config config/final_validation.yaml
+.venv/bin/python scripts/export_release_artifacts.py --experiment EXP-000001 \
+  --database data/release/finagent_v1.db --output reports/v1.0
+```
+
+On a clean `data/release/finagent_v1.db`, the validation anchor is `EXP-000001` and its validation is `VAL-000001`; an existing database will allocate the next identifiers. See [results](docs/RESULTS.md) for the committed reference output and [methodology](docs/RESEARCH_METHODOLOGY.md) for its limits.
+
 Fetch/register bundled or public historical daily data:
 
 ```bash
@@ -133,14 +146,18 @@ Backups and exports refuse to overwrite an existing target unless `backup --over
 
 ## Architecture
 
-```text
-historical CSV/provider → normalization + quality → immutable cache/revisions
-        ↓
-features → causal regimes → optional deterministic agent decision chain → simulator + costs
-        ↓
-metrics + benchmark → critic + memory → explicit bounded improvement / explicit validation
-        ↓
-SQLite artifacts + reports → FastAPI service → Next.js workspace / CLI / Streamlit debug view
+```mermaid
+flowchart TD
+  data[Historical CSV / provider] --> quality[Normalise, validate, version]
+  quality --> features[Causal technical features]
+  features --> regimes[Rule-based regimes]
+  regimes --> agents[Optional deterministic agent chain]
+  features --> backtest[Cost-aware backtest]
+  agents --> backtest
+  backtest --> evidence[Metrics, benchmarks, critique, memory]
+  evidence --> validation[Explicit validation and release exports]
+  validation --> storage[SQLite + Markdown/CSV/SVG/JSON]
+  storage --> surfaces[FastAPI · Next.js · CLI · Streamlit]
 ```
 
 Read [architecture notes](docs/ARCHITECTURE.md) and [research methodology](docs/RESEARCH_METHODOLOGY.md) for boundaries and data flow.
@@ -171,6 +188,7 @@ tests/                 deterministic Python tests
 | V0.7 | FastAPI and Next.js local research workspace |
 | V0.8 | Historical data providers, quality, cache, revisions, collections |
 | V0.9 | Production polish, local operations, demo mode, UX and API consistency |
+| V1.0.0 | Final deterministic evaluation suite, portable exports, release docs, and verification |
 
 ## Limitations and roadmap
 
@@ -188,7 +206,7 @@ npm test
 npm run build
 ```
 
-See [development notes](docs/DEVELOPMENT.md) and [troubleshooting](docs/TROUBLESHOOTING.md) for local operation.
+See the [architecture](docs/ARCHITECTURE.md), [methodology](docs/RESEARCH_METHODOLOGY.md), [results](docs/RESULTS.md), [demo](docs/DEMO.md), [development notes](docs/DEVELOPMENT.md), [troubleshooting](docs/TROUBLESHOOTING.md), and [release checklist](docs/RELEASE_CHECKLIST.md) for local operation and release evidence.
 
 For public Render/Vercel deployment settings, including required CORS and persistent SQLite-disk configuration, read [deployment instructions](docs/DEPLOYMENT.md).
 

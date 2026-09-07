@@ -1,6 +1,7 @@
-# Safe, reproducible V0.9 demo configuration. It uses only bundled CSV data.
+# Safe, reproducible FinAgent 1.0.0 demo configuration. It uses only bundled CSV data.
 application:
   demo_mode: true
+  version: "1.0.0"
 
 experiment:
   asset: DEMO_EXAMPLE
@@ -8,7 +9,7 @@ experiment:
   starting_capital: 100000.0
   random_seed: 42
 
-database_path: data/demo/finagent_demo.db
+database_path: data/demo/finagent_v1_demo.db
 
 agents:
   enabled: true

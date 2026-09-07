@@ -1,0 +1,65 @@
+# FinAgent 1.0.0 reference experiment. It uses only bundled, immutable CSV fixtures.
+# These fixtures are a reproducible release check, not a claim of market representativeness.
+application:
+  name: FinAgent
+  version: "1.0.0"
+  live_trading_enabled: false
+
+release:
+  name: "v1.0.0-final-reference"
+  purpose: "deterministic historical-release verification"
+  dataset_suite: "bundled_two_asset_fixture"
+
+experiment:
+  asset: BUNDLED_PRIMARY
+  dataset: data/raw/example_ohlcv.csv
+  starting_capital: 100000.0
+  random_seed: 42
+
+# Deliberately separate from normal local research data.
+database_path: data/release/finagent_v1.db
+
+features:
+  simple_return: true
+  log_return: true
+  rolling_volatility:
+    window: 10
+  sma:
+    window: 5
+  ema:
+    span: 5
+  momentum:
+    window: 5
+  rsi:
+    window: 14
+  rolling_volume_mean:
+    window: 10
+  volume_change: true
+
+regime:
+  enabled: true
+
+agents:
+  enabled: true
+
+critic:
+  enabled: true
+
+# Learning remains disabled. A self-improved comparator is included only after
+# a separately promoted, out-of-sample configuration exists.
+learning:
+  enabled: false
+
+strategy:
+  name: momentum
+  parameters:
+    lookback_window: 5
+    entry_threshold: 0.0
+    exit_threshold: -0.02
+
+backtest:
+  annualization_factor: 252
+  position_fraction: 1.0
+  transaction_costs:
+    percentage_fee: 0.001
+    fixed_fee: 1.0

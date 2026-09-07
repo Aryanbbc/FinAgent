@@ -1,4 +1,4 @@
-"""Stable Pydantic response and request models for the local V0.9 API."""
+"""Stable Pydantic response and request models for the FinAgent 1.0.0 API."""
 
 from __future__ import annotations
 

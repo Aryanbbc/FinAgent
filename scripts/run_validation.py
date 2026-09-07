@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the explicit FinAgent V0.6 research-validation suite."""
+"""Run the explicit FinAgent 1.0.0 research-validation suite."""
 
 from __future__ import annotations
 
@@ -16,15 +16,15 @@ from finagent.validation.workflow import run_research_validation  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a FinAgent V0.6 multi-asset research validation")
-    parser.add_argument("--config", default="config/validation.yaml", help="Path to V0.6 validation YAML")
+    parser = argparse.ArgumentParser(description="Run a FinAgent 1.0.0 multi-asset research validation")
+    parser.add_argument("--config", default="config/validation.yaml", help="Path to validation YAML")
     arguments = parser.parse_args()
     result = run_research_validation(arguments.config, PROJECT_ROOT, configure_logging())
     if result is None:
         print("Research validation: disabled (validation.enabled: false)")
         return 0
     print("\n========================================")
-    print("\n       FINAGENT V0.6 VALIDATION\n")
+    print("\n      FINAGENT V1.0.0 VALIDATION\n")
     print("========================================\n")
     print(f"Experiment:         {result.experiment_id}")
     print(f"Validation:         {result.validation_id}")

@@ -27,3 +27,11 @@ Use Node 20+ where possible, remove only `frontend/node_modules` if you explicit
 ## Port already in use
 
 Choose another port explicitly: `API_PORT=8001 .venv/bin/python -m uvicorn finagent.api.main:app --host 127.0.0.1 --port 8001`, then set `NEXT_PUBLIC_FINAGENT_API_URL=http://127.0.0.1:8001` in `frontend/.env.local`.
+
+## V1.0 release export cannot find an experiment
+
+Run `scripts/run_validation.py --config config/final_validation.yaml` first. The exporter needs the emitted experiment identifier and its matching release database. On a clean database this is `EXP-000001`; it is different when prior runs exist. The exporter only reads stored evidence and will not rerun a simulation.
+
+## Release check reports a version or secret-hygiene issue
+
+Run `.venv/bin/python scripts/check_release.py --json` for the exact failure. Keep `.env` files, private-key files, and generated release SQLite databases untracked. Public configuration belongs in the documented `.env.example` files; secrets do not belong in FinAgent.

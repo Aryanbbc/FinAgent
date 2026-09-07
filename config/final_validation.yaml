@@ -1,0 +1,42 @@
+# FinAgent 1.0.0 final reproducibility suite. Run explicitly; it never changes a strategy.
+source_experiment_config: config/final_experiment.yaml
+
+validation:
+  enabled: true
+  assets:
+    - asset: BUNDLED_PRIMARY
+      dataset: data/raw/example_ohlcv.csv
+    - asset: BUNDLED_SECONDARY
+      dataset: data/raw/example_ohlcv_secondary.csv
+  asset_pass:
+    maximum_drawdown: 0.30
+    minimum_trades: 0
+    minimum_sharpe: null
+  walk_forward:
+    window_mode: rolling
+    train_size: 15
+    test_size: 10
+    step_size: 10
+    minimum_train_length: 15
+    minimum_test_length: 10
+    non_overlapping_test_windows: true
+    min_windows: 2
+  leakage_checks:
+    enabled: true
+  sensitivity:
+    enabled: true
+    parameters:
+      momentum_window: [4, 5, 6]
+      risk_confidence_threshold: [0.10, 0.15, 0.20]
+  bootstrap:
+    enabled: true
+    samples: 500
+    confidence_level: 0.95
+    random_seed: 42
+  robustness:
+    maximum_drawdown: 0.30
+  ablation:
+    enabled: true
+  benchmarks:
+    enabled: true
+    final_release_suite: true

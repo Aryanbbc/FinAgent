@@ -264,13 +264,27 @@ class BenchmarkResult:
     asset: str
     benchmark: str
     metrics: MetricSnapshot
+    available: bool = True
+    unavailable_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"asset": self.asset, "benchmark": self.benchmark, "metrics": self.metrics.to_dict()}
+        return {
+            "asset": self.asset,
+            "benchmark": self.benchmark,
+            "metrics": self.metrics.to_dict(),
+            "available": self.available,
+            "unavailable_reason": self.unavailable_reason,
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BenchmarkResult":
-        return cls(str(data["asset"]), str(data["benchmark"]), MetricSnapshot.from_dict(dict(data["metrics"])))
+        return cls(
+            str(data["asset"]),
+            str(data["benchmark"]),
+            MetricSnapshot.from_dict(dict(data["metrics"])),
+            bool(data.get("available", True)),
+            str(data["unavailable_reason"]) if data.get("unavailable_reason") is not None else None,
+        )
 
 
 @dataclass(frozen=True)

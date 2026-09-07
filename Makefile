@@ -2,10 +2,13 @@ PYTHON ?= .venv/bin/python
 HOST ?= 0.0.0.0
 PORT ?= 8000
 
-.PHONY: check-env dev demo api frontend
+.PHONY: check-env release-check dev demo api frontend
 
 check-env:
 	$(PYTHON) scripts/check_environment.py
+
+release-check:
+	$(PYTHON) scripts/check_release.py
 
 api:
 	$(PYTHON) -m uvicorn finagent.api.main:app --host $(HOST) --port $(PORT)
@@ -18,4 +21,4 @@ dev:
 
 demo:
 	$(PYTHON) scripts/seed_demo.py
-	$(MAKE) dev
+	DATABASE_URL=sqlite:///data/demo/finagent_v1_demo.db $(MAKE) dev

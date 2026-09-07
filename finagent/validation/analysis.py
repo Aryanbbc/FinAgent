@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from finagent import __version__
 from finagent.learning.candidate_generator import CandidateGenerator
 from finagent.validation.engine import SimulationResult, simulate_configuration
 from finagent.validation.models import (
@@ -210,6 +211,72 @@ def benchmark_suite(simulations: Sequence[SimulationResult], configuration: dict
     return tuple(results)
 
 
+def final_release_benchmark_suite(
+    simulations: Sequence[SimulationResult], configuration: dict[str, Any]
+) -> tuple[BenchmarkResult, ...]:
+    """Run the fixed V1.0 release comparators without changing research behaviour.
+
+    Critic/memory is deliberately identified as post-experiment evidence, so its
+    in-run metrics equal the multi-agent comparator. A self-improved comparator
+    is available only when a separately promoted configuration is supplied; this
+    release suite never invents one from in-sample observations.
+    """
+    results: list[BenchmarkResult] = []
+    available = configuration.get("agents", {}).get("strategy", {}).get("available_strategies", {})
+    for simulation in simulations:
+        results.append(BenchmarkResult(simulation.asset, "buy_and_hold", simulation.benchmark_snapshot))
+        for strategy_name in ("moving_average", "momentum", "mean_reversion"):
+            baseline = _benchmark_configuration(configuration, strategy_name, available, regime=False, agents=False, critic=False)
+            results.append(
+                BenchmarkResult(
+                    simulation.asset,
+                    strategy_name,
+                    simulate_configuration(simulation.market_data, baseline, simulation.asset).metric_snapshot,
+                )
+            )
+        regime_aware = _benchmark_configuration(
+            configuration, str(configuration["strategy"]["name"]), available, regime=True, agents=False, critic=False
+        )
+        results.append(
+            BenchmarkResult(
+                simulation.asset,
+                "regime_aware_finagent",
+                simulate_configuration(simulation.market_data, regime_aware, simulation.asset).metric_snapshot,
+            )
+        )
+        multi_agent = _benchmark_configuration(
+            configuration, str(configuration["strategy"]["name"]), available, regime=True, agents=True, critic=False
+        )
+        multi_agent_metrics = simulate_configuration(simulation.market_data, multi_agent, simulation.asset).metric_snapshot
+        results.append(BenchmarkResult(simulation.asset, "multi_agent_finagent", multi_agent_metrics))
+        # The critic and memory examine completed experiments; they cannot affect
+        # a historical decision path in this deterministic release.
+        results.append(BenchmarkResult(simulation.asset, "critic_memory_finagent", multi_agent_metrics))
+        results.append(
+            BenchmarkResult(
+                simulation.asset,
+                "self_improved_finagent",
+                MetricSnapshot(None, None, None, None, None, 0.0, 0),
+                available=False,
+                unavailable_reason="no_promoted_configuration",
+            )
+        )
+    return tuple(results)
+
+
+def _benchmark_configuration(
+    configuration: dict[str, Any], strategy_name: str, available: Mapping[str, Any], *, regime: bool, agents: bool, critic: bool
+) -> dict[str, Any]:
+    """Create an isolated, explicitly labelled comparator configuration."""
+    result = copy.deepcopy(configuration)
+    result["strategy"] = {"name": strategy_name, "parameters": dict(available.get(strategy_name, result["strategy"].get("parameters", {})))}
+    result.setdefault("regime", {})["enabled"] = regime
+    result.setdefault("agents", {})["enabled"] = agents
+    result.setdefault("critic", {})["enabled"] = critic
+    result.setdefault("learning", {})["enabled"] = False
+    return result
+
+
 def ablation_study(simulations_by_asset: Sequence[tuple[str, pd.DataFrame]], configuration: dict[str, Any], scorer: RobustnessScorer) -> tuple[AblationResult, ...]:
     """Compare fixed component configurations; post-experiment modules never influence in-run execution."""
     variants = (
@@ -285,11 +352,17 @@ def _dataset_identifier(dataset: Path, root: Path) -> dict[str, Any]:
 
 def _code_version(project_root: Path) -> str:
     try:
-        return subprocess.run(
+        revision = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], cwd=project_root, check=True, capture_output=True, text=True
         ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"], cwd=project_root, check=True, capture_output=True, text=True
+            ).stdout.strip()
+        )
+        return f"{__version__}+{revision}{'.dirty' if dirty else ''}"
     except (OSError, subprocess.CalledProcessError):
-        return "unavailable"
+        return f"{__version__}+unavailable"
 
 
 def _mean(values: Any) -> float | None:

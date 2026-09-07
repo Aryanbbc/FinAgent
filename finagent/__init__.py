@@ -1,3 +1,3 @@
-"""FinAgent V0.9 local quantitative research engine and professional workspace."""
+"""FinAgent 1.0.0 deterministic historical-research engine and workspace."""
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"

@@ -28,6 +28,7 @@ from finagent.validation.analysis import (
     benchmark_suite,
     bootstrap_confidence_intervals,
     build_manifest,
+    final_release_benchmark_suite,
 )
 from finagent.validation.engine import configuration_for_asset, simulate_configuration, test_window_snapshot
 from finagent.validation.leakage import run_leakage_checks, validate_preprocessing_scope
@@ -168,8 +169,13 @@ def run_research_validation(
     if bool(validation_configuration.get("ablation", {}).get("enabled", False)):
         ablations = ablation_study(simulations_by_asset, source_configuration, scorer)
     benchmarks = ()
-    if bool(validation_configuration.get("benchmarks", {}).get("enabled", False)):
-        benchmarks = benchmark_suite(simulations, source_configuration)
+    benchmark_configuration = dict(validation_configuration.get("benchmarks", {}))
+    if bool(benchmark_configuration.get("enabled", False)):
+        benchmarks = (
+            final_release_benchmark_suite(simulations, source_configuration)
+            if bool(benchmark_configuration.get("final_release_suite", False))
+            else benchmark_suite(simulations, source_configuration)
+        )
     manifest = build_manifest(
         experiment_id,
         source_configuration,
