@@ -50,6 +50,9 @@ Set these API environment variables:
 | `FRONTEND_ORIGIN` | exact Vercel production origin, for example `https://fin-agent-iota.vercel.app` |
 | `DATABASE_URL` | Render PostgreSQL **Internal Database URL** (Blueprint: supplied automatically) |
 | `TWELVE_DATA_API_KEY` | Twelve Data API key, set as a Render secret; backend-only, never expose it to Vercel or browser code |
+| `FINAGENT_ADMIN_API_KEY` | strong Render secret required for every state-changing research endpoint; never add it to Vercel or `NEXT_PUBLIC_*` |
+| `FINAGENT_MUTATION_RATE_LIMIT` | `5` authorized mutation requests per instance/window by default |
+| `FINAGENT_MUTATION_RATE_WINDOW_SECONDS` | `300` seconds by default |
 | `LIVE_MARKET_ENABLED` | `false` by default; set `true` only to opt into V1.1 monitoring |
 | `LIVE_DEFAULT_SYMBOL` | `AAPL` (or one symbol included in `LIVE_SYMBOLS`) |
 | `LIVE_SYMBOLS` | `AAPL` by default; comma-separated configured monitoring symbols |
@@ -62,6 +65,12 @@ Set these API environment variables:
 | `LIVE_TRADING_ENABLED` | `false` |
 
 Do **not** set `PORT`; Render supplies it. Do not set `DATABASE_URL` to SQLite in production. The cache and report directories may be ephemeral: cache files are only an optimization, report Markdown is regenerated from persisted research evidence, and canonical dataset rows live in PostgreSQL.
+
+The public Vercel UI is read-only by design. Invoke dataset ingestion and
+research runs from an administrator-controlled terminal with
+`X-FinAgent-Admin-Key: $FINAGENT_ADMIN_API_KEY`; see
+[security controls](SECURITY.md#public-and-protected-routes). Do not enter or
+store this key in a browser, Vercel environment variable, or frontend bundle.
 
 Redeploy and verify:
 

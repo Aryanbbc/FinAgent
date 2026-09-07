@@ -34,8 +34,16 @@ def client(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, str, s
     validation = run_research_validation(validation_path, PROJECT_ROOT)
     assert validation is not None
 
-    settings = Settings(project_root=PROJECT_ROOT, database_url=f"sqlite:///{temporary / 'api.db'}", data_cache_directory=temporary / "cache")
-    return TestClient(create_app(settings)), experiment_id, validation.experiment_id
+    settings = Settings(
+        project_root=PROJECT_ROOT,
+        database_url=f"sqlite:///{temporary / 'api.db'}",
+        data_cache_directory=temporary / "cache",
+        admin_api_key="api-test-key",
+        # This shared integration fixture invokes several different protected
+        # routes; dedicated security coverage verifies the production default.
+        mutation_rate_limit=20,
+    )
+    return TestClient(create_app(settings), headers={"X-FinAgent-Admin-Key": "api-test-key"}), experiment_id, validation.experiment_id
 
 
 def test_health_and_openapi(client: tuple[TestClient, str, str]) -> None:

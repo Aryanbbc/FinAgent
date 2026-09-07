@@ -41,8 +41,8 @@ class CandidateGenerator:
     def __post_init__(self) -> None:
         if self.mode not in {"neighborhood", "grid"}:
             raise ValueError("Candidate search mode must be 'neighborhood' or 'grid'")
-        if self.max_candidates < 1:
-            raise ValueError("max_candidates must be positive")
+        if not 1 <= self.max_candidates <= 5:
+            raise ValueError("max_candidates must be between 1 and 5")
 
     def generate(
         self,

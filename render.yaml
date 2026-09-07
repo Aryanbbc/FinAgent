@@ -18,6 +18,12 @@ services:
           property: connectionString
       - key: TWELVE_DATA_API_KEY
         sync: false
+      - key: FINAGENT_ADMIN_API_KEY
+        sync: false
+      - key: FINAGENT_MUTATION_RATE_LIMIT
+        value: "5"
+      - key: FINAGENT_MUTATION_RATE_WINDOW_SECONDS
+        value: "300"
       - key: LIVE_MARKET_ENABLED
         value: "false"
       - key: LIVE_DEFAULT_SYMBOL

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import subprocess
+# Fixed git metadata commands below use no shell or user input.
+import subprocess  # nosec B404
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -352,11 +353,11 @@ def _dataset_identifier(dataset: Path, root: Path) -> dict[str, Any]:
 
 def _code_version(project_root: Path) -> str:
     try:
-        revision = subprocess.run(
+        revision = subprocess.run(  # nosec
             ["git", "rev-parse", "--short", "HEAD"], cwd=project_root, check=True, capture_output=True, text=True
         ).stdout.strip()
         dirty = bool(
-            subprocess.run(
+            subprocess.run(  # nosec
                 ["git", "status", "--porcelain"], cwd=project_root, check=True, capture_output=True, text=True
             ).stdout.strip()
         )

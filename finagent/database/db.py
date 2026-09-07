@@ -128,7 +128,8 @@ class Database:
     def connect(self) -> DatabaseConnection:
         """Open a bounded connection with backend-specific safety settings."""
         if self.backend == "sqlite":
-            assert self.path is not None
+            if self.path is None:
+                raise DatabaseError("SQLite database path is unavailable")
             if self.path != Path(":memory:"):
                 self.path.parent.mkdir(parents=True, exist_ok=True)
             connection = sqlite3.connect(self.path, timeout=5.0)
@@ -489,7 +490,8 @@ class Database:
         """Create a consistent SQLite backup without deleting the source database."""
         if self.backend != "sqlite":
             raise ValueError("Database backups are only available for SQLite; use PostgreSQL-native backups in production")
-        assert self.path is not None
+        if self.path is None:
+            raise DatabaseError("SQLite database path is unavailable")
         target = Path(destination)
         if target.resolve() == self.path.resolve():
             raise ValueError("backup destination must differ from the source database")

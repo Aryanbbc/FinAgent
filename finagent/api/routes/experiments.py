@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 
 from finagent.api.dependencies import get_service
+from finagent.api.security import audit_admin_action, require_admin, require_mutation_rate_limit
 from finagent.api.schemas import (
     AgentDecisionsResponse,
     ActivityResponse,
@@ -21,14 +22,15 @@ from finagent.api.schemas import (
 from finagent.services.research_service import ResearchService
 
 router = APIRouter(prefix="/api/experiments", tags=["Experiments"])
+_experiment_id = Path(..., min_length=10, max_length=32, pattern=r"^EXP-[0-9]{6}$")
 
 
 @router.get("", response_model=ExperimentListResponse)
 def list_experiments(
-    limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), search: str | None = None,
-    strategy: str | None = None, asset: str | None = None, start_date: str | None = None, end_date: str | None = None,
-    regime: str | None = None, status: str | None = Query(default=None, pattern=r"^(validated|unvalidated|critiqued|without_critique)$"),
-    version: str | None = None, sort_by: str = Query("created_at", pattern=r"^(created_at|total_return|sharpe_ratio|maximum_drawdown|start_date)$"),
+    limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0), search: str | None = Query(default=None, max_length=120),
+    strategy: str | None = Query(default=None, max_length=40), asset: str | None = Query(default=None, max_length=64), start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"), end_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    regime: str | None = Query(default=None, pattern=r"^(bull|bear|sideways|high_volatility|low_volatility|stress)$"), status: str | None = Query(default=None, pattern=r"^(validated|unvalidated|critiqued|without_critique)$"),
+    version: str | None = Query(default=None, max_length=64), sort_by: str = Query("created_at", pattern=r"^(created_at|total_return|sharpe_ratio|maximum_drawdown|start_date)$"),
     sort_order: str = Query("desc", pattern=r"^(asc|desc)$"),
     service: ResearchService = Depends(get_service),
 ) -> dict[str, object]:
@@ -36,19 +38,24 @@ def list_experiments(
     return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 
-@router.post("/run", response_model=ExecutionResponse)
-def run(request: RunRequest, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+@router.post(
+    "/run",
+    response_model=ExecutionResponse,
+    dependencies=[Depends(require_admin), Depends(require_mutation_rate_limit)],
+)
+def run(request: RunRequest, http_request: Request, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+    audit_admin_action(http_request, "ADMIN_EXPERIMENT_RUN")
     return service.run_experiment(request.config_path, request.model_dump(exclude_none=True))
 
 
 @router.get("/{experiment_id}", response_model=ExperimentDetail)
-def experiment(experiment_id: str, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+def experiment(experiment_id: str = _experiment_id, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return service.experiment_detail(experiment_id)
 
 
 @router.get("/{experiment_id}/market-data", response_model=OhlcvSeriesResponse)
 def market_data(
-    experiment_id: str,
+    experiment_id: str = _experiment_id,
     start_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     end_date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     limit: int = Query(default=1200, ge=2, le=5000),
@@ -58,23 +65,23 @@ def market_data(
 
 
 @router.get("/{experiment_id}/trades", response_model=TradesResponse)
-def trades(experiment_id: str, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+def trades(experiment_id: str = _experiment_id, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return {"experiment_id": experiment_id, "items": service.trades(experiment_id)}
 
 
 @router.get("/{experiment_id}/regimes", response_model=RegimesResponse)
-def regimes(experiment_id: str, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+def regimes(experiment_id: str = _experiment_id, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return service.regimes(experiment_id)
 
 
 @router.get("/{experiment_id}/agent-decisions", response_model=AgentDecisionsResponse)
-def agent_decisions(experiment_id: str, limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0), service: ResearchService = Depends(get_service)) -> dict[str, object]:
+def agent_decisions(experiment_id: str = _experiment_id, limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0), service: ResearchService = Depends(get_service)) -> dict[str, object]:
     items, total = service.agent_decisions(experiment_id, limit, offset)
     return {"experiment_id": experiment_id, "items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 
 @router.get("/{experiment_id}/critique", response_model=CritiqueResponse)
-def critique(experiment_id: str, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+def critique(experiment_id: str = _experiment_id, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     return service.critique(experiment_id)
 
 

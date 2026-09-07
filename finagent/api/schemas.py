@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+MAX_HISTORICAL_RANGE_DAYS = 3_660
+
+
+def _parse_iso_date(value: str, field_name: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be a valid ISO calendar date") from error
 
 
 class APIModel(BaseModel):
@@ -394,6 +405,16 @@ class DataFetchRequest(APIModel):
     asset_class: str = Field(default="equity", max_length=40)
     missing_data_policy: Literal["reject", "forward_fill", "drop", "warn_only"] = "reject"
 
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "DataFetchRequest":
+        start = _parse_iso_date(self.start_date, "start_date")
+        end = _parse_iso_date(self.end_date, "end_date")
+        if end < start:
+            raise ValueError("end_date must be on or after start_date")
+        if (end - start).days > MAX_HISTORICAL_RANGE_DAYS:
+            raise ValueError(f"historical date range must not exceed {MAX_HISTORICAL_RANGE_DAYS} days")
+        return self
+
 
 class DataFetchResponse(APIModel):
     dataset: DatasetSummary
@@ -428,7 +449,7 @@ class RunRequest(APIModel):
         ...,
         min_length=12,
         max_length=160,
-        pattern=r"^config/[A-Za-z0-9_./-]+\.ya?ml$",
+        pattern=r"^config/[A-Za-z0-9_-]+\.ya?ml$",
     )
     dataset_id: str | None = Field(default=None, min_length=6, max_length=120, pattern=r"^DATA-[A-Z0-9-]+$")
     # These optional controls are deliberately bounded projections of the
@@ -445,6 +466,18 @@ class RunRequest(APIModel):
     risk_max_volatility: float | None = Field(default=None, gt=0, le=5)
     start_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     end_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "RunRequest":
+        if self.start_date is None or self.end_date is None:
+            return self
+        start = _parse_iso_date(self.start_date, "start_date")
+        end = _parse_iso_date(self.end_date, "end_date")
+        if end < start:
+            raise ValueError("end_date must be on or after start_date")
+        if (end - start).days > MAX_HISTORICAL_RANGE_DAYS:
+            raise ValueError(f"historical date range must not exceed {MAX_HISTORICAL_RANGE_DAYS} days")
+        return self
 
 
 class ExecutionResponse(APIModel):

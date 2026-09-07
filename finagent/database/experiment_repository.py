@@ -254,10 +254,11 @@ class ExperimentRepository:
         }
         order_column = sort_columns.get(sort_by, "created_at")
         direction = "ASC" if sort_order.lower() == "asc" else "DESC"
+        # Conditional predicates and sortable columns are internal allowlists; values use bindings.
         with self.database.connect() as connection:
-            total = connection.execute(f"SELECT COUNT(*) AS count FROM experiments{where}", parameters).fetchone()["count"]
+            total = connection.execute(f"SELECT COUNT(*) AS count FROM experiments{where}", parameters).fetchone()["count"]  # nosec B608
             rows = connection.execute(
-                f"SELECT * FROM experiments{where} ORDER BY {order_column} {direction}, experiment_id DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
+                f"SELECT * FROM experiments{where} ORDER BY {order_column} {direction}, experiment_id DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]  # nosec B608
             ).fetchall()
         return [self._to_record(row) for row in rows], int(total)
 
@@ -444,18 +445,26 @@ class ExperimentRepository:
         return self._ranked_strategy_by_regime(regime, descending=False, limit=limit)
 
     def _ranked_strategy_by_regime(self, regime: str, descending: bool, limit: int) -> list[MemoryQueryResult]:
-        direction = "DESC" if descending else "ASC"
+        statement = """
+            SELECT memory.experiment_id, memory.strategy, performance.regime, performance.compounded_return,
+                   memory.maximum_drawdown, memory.turnover, memory.created_at
+            FROM experiment_memory AS memory
+            JOIN memory_regime_performance AS performance ON performance.experiment_id = memory.experiment_id
+            WHERE performance.regime = ?
+            ORDER BY performance.compounded_return DESC, memory.created_at DESC
+            LIMIT ?
+        """ if descending else """
+            SELECT memory.experiment_id, memory.strategy, performance.regime, performance.compounded_return,
+                   memory.maximum_drawdown, memory.turnover, memory.created_at
+            FROM experiment_memory AS memory
+            JOIN memory_regime_performance AS performance ON performance.experiment_id = memory.experiment_id
+            WHERE performance.regime = ?
+            ORDER BY performance.compounded_return ASC, memory.created_at DESC
+            LIMIT ?
+        """
         with self.database.connect() as connection:
             rows = connection.execute(
-                f"""
-                SELECT memory.experiment_id, memory.strategy, performance.regime, performance.compounded_return,
-                       memory.maximum_drawdown, memory.turnover, memory.created_at
-                FROM experiment_memory AS memory
-                JOIN memory_regime_performance AS performance ON performance.experiment_id = memory.experiment_id
-                WHERE performance.regime = ?
-                ORDER BY performance.compounded_return {direction}, memory.created_at DESC
-                LIMIT ?
-                """,
+                statement,
                 (regime, limit),
             ).fetchall()
         return [self._memory_query_result(row) for row in rows]
@@ -678,10 +687,11 @@ class ExperimentRepository:
             clauses.append("created_at <= ?")
             parameters.append(f"{end_date}T23:59:59")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # Conditional predicates are fixed; user values continue through DB-API bindings.
         with self.database.connect() as connection:
-            total = connection.execute(f"SELECT COUNT(*) AS count FROM candidate_evaluations{where}", parameters).fetchone()["count"]
+            total = connection.execute(f"SELECT COUNT(*) AS count FROM candidate_evaluations{where}", parameters).fetchone()["count"]  # nosec B608
             rows = connection.execute(
-                f"SELECT * FROM candidate_evaluations{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
+                f"SELECT * FROM candidate_evaluations{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]  # nosec B608
             ).fetchall()
         return [self._decision_from_row(row) for row in rows], int(total)
 
@@ -853,10 +863,11 @@ class ExperimentRepository:
             clauses.append("created_at <= ?")
             parameters.append(f"{end_date}T23:59:59")
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # Conditional predicates are fixed; user values continue through DB-API bindings.
         with self.database.connect() as connection:
-            total = connection.execute(f"SELECT COUNT(*) AS count FROM research_validations{where}", parameters).fetchone()["count"]
+            total = connection.execute(f"SELECT COUNT(*) AS count FROM research_validations{where}", parameters).fetchone()["count"]  # nosec B608
             rows = connection.execute(
-                f"SELECT validation_json FROM research_validations{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]
+                f"SELECT validation_json FROM research_validations{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*parameters, limit, offset]  # nosec B608
             ).fetchall()
         return [ResearchValidationResult.from_dict(json.loads(row["validation_json"])) for row in rows], int(total)
 

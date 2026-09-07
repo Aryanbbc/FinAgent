@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import subprocess
+# Static git metadata command below uses no shell or request input.
+import subprocess  # nosec B404
 import logging
 import json
 from collections.abc import Mapping
@@ -41,6 +42,8 @@ class InvalidConfigurationError(ValueError):
 
 class ResearchService:
     """Maps V0.1–V0.9 records into API-safe structures and runs existing local workflows."""
+
+    _MAX_REPORT_BYTES = 1_000_000
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -275,6 +278,8 @@ class ResearchService:
                 report = ResearchReportExporter(self.repository).export(experiment_id, report)
             except ValueError as error:
                 raise NotFoundError(f"Report not found for experiment: {experiment_id}") from error
+        if report.stat().st_size > self._MAX_REPORT_BYTES:
+            raise InvalidConfigurationError("The requested report exceeds the public response size limit")
         return report
 
     def report(self, experiment_id: str) -> dict[str, str]:
@@ -337,7 +342,7 @@ class ResearchService:
     def system(self) -> dict[str, Any]:
         latest = self.repository.latest_experiment()
         try:
-            revision = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=self.settings.project_root, capture_output=True, text=True, check=True).stdout.strip()
+            revision = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=self.settings.project_root, capture_output=True, text=True, check=True).stdout.strip()  # nosec
         except (OSError, subprocess.CalledProcessError):
             revision = None
         _, experiment_count = self.repository.list_experiments(limit=1)
@@ -347,7 +352,9 @@ class ResearchService:
         health = self.database.health_check()
         demo = self.database.demo_seed("default")
         return {
-            "finagent_version": __version__, "database_path": str(health["path"]),
+            # Health/system intentionally expose status and backend only.  A
+            # local file path or managed database hostname is deployment data.
+            "finagent_version": __version__, "database_path": "redacted",
             "database_exists": self.database.backend == "postgresql" or (self.database.path is not None and self.database.path.exists()),
             "database_size_bytes": int(health["size_bytes"]), "database_backend": self.database.backend,
             "database_connectivity": bool(health["database_connectivity"]),
@@ -379,7 +386,7 @@ class ResearchService:
             sample[column] = sample[column].map(self._clean)
         payload = self._dataset_summary(dataset)
         payload.update({
-            "cache_path": dataset.cache_path, "metadata": dataset.metadata.to_dict(), "validation": dataset.validation.to_dict(),
+            "cache_path": "redacted", "metadata": dataset.metadata.to_dict(), "validation": dataset.validation.to_dict(),
             "sample_rows": sample.to_dict(orient="records"), "versions": [self._dataset_summary(item) for item in self.dataset_registry.versions(dataset_id)],
         })
         return payload
@@ -464,7 +471,8 @@ class ResearchService:
         if not path.is_absolute():
             path = self.settings.project_root / path
         path = path.resolve()
-        if not path.is_relative_to(self.settings.project_root.resolve()) or not path.is_file():
+        allowed_data_root = (self.settings.project_root / "data" / "raw").resolve()
+        if not path.is_relative_to(allowed_data_root) or not path.is_file():
             raise NotFoundError(f"Market data not available for experiment: {experiment_id}")
         return self._bounded_ohlcv(
             CSVDataLoader().load(path),
@@ -563,8 +571,9 @@ class ResearchService:
             if not candidate.is_absolute():
                 candidate = self.settings.project_root / candidate
             candidate = candidate.resolve()
-            if not candidate.is_relative_to(self.settings.project_root.resolve()):
-                raise InvalidConfigurationError("source_path must remain within the local FinAgent project directory")
+            allowed_data_root = (self.settings.project_root / "data" / "raw").resolve()
+            if candidate.suffix.lower() != ".csv" or not candidate.is_relative_to(allowed_data_root) or not candidate.is_file():
+                raise InvalidConfigurationError("source_path must reference an existing CSV within data/raw/")
             raw["source_path"] = str(candidate)
         request = MarketDataRequest(
             symbol=str(raw["symbol"]), start_date=str(raw["start_date"]), end_date=str(raw["end_date"]),

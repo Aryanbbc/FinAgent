@@ -19,6 +19,7 @@ def test_platform_settings_prefer_port_and_merge_exact_frontend_origin(monkeypat
     monkeypatch.setenv("FINAGENT_ENV", "production")
     monkeypatch.setenv("FRONTEND_ORIGIN", VERCEL_ORIGIN)
     monkeypatch.setenv("PORT", "12000")
+    monkeypatch.setenv("FINAGENT_ADMIN_API_KEY", "deployment-test-key")
     settings = Settings(project_root=tmp_path, database_url="sqlite:///research.db")
     assert settings.host == "0.0.0.0"
     assert settings.port == 12000
@@ -50,6 +51,7 @@ def test_configured_and_local_origins_receive_cors_responses(tmp_path: Path) -> 
         database_url=f"sqlite:///{tmp_path / 'research.db'}",
         environment="production",
         cors_origins=(*LOCAL_ORIGINS, VERCEL_ORIGIN),
+        admin_api_key="deployment-test-key",
     )
     client = TestClient(create_app(settings))
 
@@ -87,6 +89,7 @@ def test_unknown_origin_does_not_receive_cors_permission(tmp_path: Path) -> None
         database_url=f"sqlite:///{tmp_path / 'research.db'}",
         environment="production",
         cors_origins=(*LOCAL_ORIGINS, VERCEL_ORIGIN),
+        admin_api_key="deployment-test-key",
     )
     client = TestClient(create_app(settings))
     unknown_origin = "https://untrusted.example.com"

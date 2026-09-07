@@ -151,15 +151,27 @@ class LiveMarketRepository:
     @staticmethod
     def _trim(connection: Any, table: str, symbol: str, retention: int) -> None:
         """Keep bounded recent evidence without retaining an unbounded tick stream."""
-        connection.execute(
-            f"DELETE FROM {table} WHERE symbol = ? AND id NOT IN (SELECT id FROM {table} WHERE symbol = ? ORDER BY id DESC LIMIT ?)",
-            (symbol, symbol, retention),
-        ) if table in {"live_signals", "live_feed_events"} else connection.execute(
-            """DELETE FROM live_regime_observations WHERE symbol = ? AND timestamp NOT IN (
-                SELECT timestamp FROM live_regime_observations WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?
-            )""",
-            (symbol, symbol, retention),
-        )
+        if table == "live_signals":
+            connection.execute(
+                "DELETE FROM live_signals WHERE symbol = ? AND id NOT IN "
+                "(SELECT id FROM live_signals WHERE symbol = ? ORDER BY id DESC LIMIT ?)",
+                (symbol, symbol, retention),
+            )
+        elif table == "live_feed_events":
+            connection.execute(
+                "DELETE FROM live_feed_events WHERE symbol = ? AND id NOT IN "
+                "(SELECT id FROM live_feed_events WHERE symbol = ? ORDER BY id DESC LIMIT ?)",
+                (symbol, symbol, retention),
+            )
+        elif table == "live_regime_observations":
+            connection.execute(
+                """DELETE FROM live_regime_observations WHERE symbol = ? AND timestamp NOT IN (
+                    SELECT timestamp FROM live_regime_observations WHERE symbol = ? ORDER BY timestamp DESC LIMIT ?
+                )""",
+                (symbol, symbol, retention),
+            )
+        else:
+            raise ValueError("Unknown bounded live evidence table")
 
     def signals(self, symbol: str, limit: int) -> list[dict[str, object]]:
         with self.database.connect() as connection:

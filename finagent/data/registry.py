@@ -148,12 +148,13 @@ class DatasetRegistry:
             parameters.append(end_date)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.database.connect() as connection:
+            # The conditional SQL fragments are fixed predicates; all filter values use bindings.
             total = int(connection.execute(
-                f"SELECT COUNT(*) AS count FROM datasets AS dataset JOIN dataset_versions AS version ON version.version_id = dataset.current_version_id{where}", parameters
+                f"SELECT COUNT(*) AS count FROM datasets AS dataset JOIN dataset_versions AS version ON version.version_id = dataset.current_version_id{where}", parameters  # nosec B608
             ).fetchone()["count"])
             rows = connection.execute(
                 """SELECT version.* FROM datasets AS dataset JOIN dataset_versions AS version
-                   ON version.version_id = dataset.current_version_id""" + where + " ORDER BY version.last_refreshed_at DESC LIMIT ? OFFSET ?",
+                   ON version.version_id = dataset.current_version_id""" + where + " ORDER BY version.last_refreshed_at DESC LIMIT ? OFFSET ?",  # nosec B608
                 [*parameters, limit, offset],
             ).fetchall()
         return [self._version_from_row(row) for row in rows], total

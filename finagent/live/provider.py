@@ -8,13 +8,23 @@ from abc import ABC, abstractmethod
 from datetime import UTC
 from typing import Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 import pandas as pd
 
 from finagent.data.market_provider import MarketDataProviderError
 from finagent.live.models import LiveMarketBar
+
+
+def _fixed_https_get(url: str) -> bytes:
+    """The live provider uses only the hard-coded Twelve Data HTTPS endpoint."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != "api.twelvedata.com":
+        raise MarketDataProviderError("PROVIDER_SECURITY_ERROR", "Provider endpoint is not an approved HTTPS destination.", provider="twelve_data")
+    # Scheme and hostname are checked against a provider constant above.
+    with urlopen(Request(url, headers={"User-Agent": "FinAgent/1.1 live-market-intelligence"}), timeout=20) as response:  # nosec B310
+        return response.read()
 
 
 class LiveMarketProvider(ABC):
@@ -102,8 +112,7 @@ class TwelveDataLiveProvider(LiveMarketProvider):
     @staticmethod
     def _default_get(url: str) -> bytes:
         try:
-            with urlopen(Request(url, headers={"User-Agent": "FinAgent/1.1 live-market-intelligence"}), timeout=20) as response:
-                return response.read()
+            return _fixed_https_get(url)
         except HTTPError as error:
             if error.code == 429:
                 raise MarketDataProviderError("RATE_LIMIT", "Twelve Data rate limit reached.", provider="twelve_data", status=429, reason="The Twelve Data rate limit was reached.", retryable=True) from error

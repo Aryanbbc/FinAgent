@@ -37,6 +37,8 @@ class WalkForwardConfig:
     def __post_init__(self) -> None:
         if self.train_size < 1 or self.test_size < 2 or self.step_size < 1 or self.min_windows < 1:
             raise ValueError("Walk-forward train_size, test_size, step_size, and min_windows must be positive")
+        if self.train_size > 10_000 or self.test_size > 5_000 or self.step_size > 5_000 or self.min_windows > 100:
+            raise ValueError("Walk-forward settings exceed the configured resource limits")
         if self.window_mode not in {"rolling", "expanding"}:
             raise ValueError("window_mode must be 'rolling' or 'expanding'")
         if self.minimum_train_length is not None and self.train_size < self.minimum_train_length:

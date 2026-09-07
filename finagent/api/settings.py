@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -74,7 +75,17 @@ def _live_symbols() -> tuple[str, ...]:
     symbols = tuple(item.strip().upper() for item in raw.split(",") if item.strip())
     if not symbols:
         raise ValueError("LIVE_DEFAULT_SYMBOL or LIVE_SYMBOLS must contain at least one symbol")
+    if len(symbols) > 10:
+        raise ValueError("LIVE_SYMBOLS may contain at most 10 configured symbols")
+    if any(not re.fullmatch(r"[A-Z0-9._^=-]{1,32}", symbol) for symbol in symbols):
+        raise ValueError("LIVE_SYMBOLS must contain valid symbols without whitespace")
     return tuple(dict.fromkeys(symbols))
+
+
+def _admin_api_key() -> str | None:
+    """Read the administrator key only from the backend process environment."""
+    value = os.getenv("FINAGENT_ADMIN_API_KEY", "").strip()
+    return value or None
 
 
 @dataclass(frozen=True)
@@ -84,14 +95,22 @@ class Settings:
     project_root: Path = field(default_factory=lambda: Path(__file__).resolve().parents[2])
     database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", "sqlite:///data/finagent.db"))
     environment: str = field(default_factory=_environment)
-    host: str = field(default_factory=lambda: os.getenv("API_HOST", "0.0.0.0"))
+    # Render must bind the container service interface explicitly.
+    host: str = field(default_factory=lambda: os.getenv("API_HOST", "0.0.0.0"))  # nosec B104
     port: int = field(default_factory=_port)
     cors_origins: tuple[str, ...] = field(default_factory=lambda: _configured_origins(_environment()))
     data_cache_directory: Path | None = None
     reports_directory: Path | None = None
+    # This value is deliberately excluded from the dataclass repr so a Settings
+    # object cannot accidentally reveal the deployment credential in logs.
+    admin_api_key: str | None = field(default_factory=_admin_api_key, repr=False)
+    admin_auth_disabled: bool = field(default_factory=lambda: _boolean("FINAGENT_DISABLE_ADMIN_AUTH", False))
+    mutation_rate_limit: int = field(default_factory=lambda: _positive_int("FINAGENT_MUTATION_RATE_LIMIT", 5, minimum=1, maximum=20))
+    mutation_rate_window_seconds: int = field(default_factory=lambda: _positive_int("FINAGENT_MUTATION_RATE_WINDOW_SECONDS", 300, minimum=30, maximum=3_600))
     # Live monitoring is an explicit non-executing opt-in.  Credentials are
     # intentionally not represented here and remain provider-local env values.
     live_market_enabled: bool = field(default_factory=lambda: _boolean("LIVE_MARKET_ENABLED", False))
+    live_trading_enabled: bool = field(default_factory=lambda: _boolean("LIVE_TRADING_ENABLED", False))
     live_default_symbol: str = field(default_factory=lambda: os.getenv("LIVE_DEFAULT_SYMBOL", "AAPL").strip().upper())
     live_symbols: tuple[str, ...] = field(default_factory=_live_symbols)
     live_interval: str = field(default_factory=lambda: os.getenv("LIVE_INTERVAL", "1min").strip())
@@ -109,6 +128,10 @@ class Settings:
             raise ValueError("Wildcard CORS origins are not permitted")
         if self.environment == "production" and not any(origin not in _LOCAL_CORS_ORIGINS for origin in self.cors_origins):
             raise ValueError("A deployed FRONTEND_ORIGIN is required in production")
+        if self.admin_auth_disabled and self.environment != "development":
+            raise ValueError("FINAGENT_DISABLE_ADMIN_AUTH is permitted only when FINAGENT_ENV=development")
+        if self.environment == "production" and not self.admin_api_key:
+            raise ValueError("FINAGENT_ADMIN_API_KEY is required when FINAGENT_ENV=production")
         if not self.live_default_symbol or any(character.isspace() for character in self.live_default_symbol):
             raise ValueError("LIVE_DEFAULT_SYMBOL must be a non-empty symbol without whitespace")
         if self.live_interval not in _LIVE_INTERVALS:
@@ -116,6 +139,8 @@ class Settings:
             raise ValueError(f"LIVE_INTERVAL must be one of: {choices}")
         if self.live_default_symbol not in self.live_symbols:
             raise ValueError("LIVE_DEFAULT_SYMBOL must be included in LIVE_SYMBOLS")
+        if self.live_trading_enabled:
+            raise ValueError("LIVE_TRADING_ENABLED must remain false; FinAgent has no execution path")
         normalized_url = self.database_url.lower()
         if not (
             normalized_url.startswith("sqlite://")

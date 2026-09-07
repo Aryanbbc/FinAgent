@@ -20,10 +20,10 @@ class ConfigurationValidationError(ValueError):
 class _ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    asset: str = Field(min_length=1)
+    asset: str = Field(min_length=1, max_length=64)
     dataset: str | None = None
     dataset_id: str | None = None
-    starting_capital: float = Field(gt=0)
+    starting_capital: float = Field(gt=0, le=1_000_000_000)
     random_seed: int | None = None
 
     @model_validator(mode="after")
@@ -43,8 +43,8 @@ class _StrategyConfig(BaseModel):
 class _TransactionCosts(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    percentage_fee: float = Field(default=0.0, ge=0, le=1)
-    fixed_fee: float = Field(default=0.0, ge=0)
+    percentage_fee: float = Field(default=0.0, ge=0, le=0.1)
+    fixed_fee: float = Field(default=0.0, ge=0, le=100_000)
 
 
 class _BacktestConfig(BaseModel):
@@ -99,6 +99,23 @@ def validate_research_configuration(configuration: dict[str, Any]) -> Configurat
 
     if typed.application.live_trading_enabled:
         raise ConfigurationValidationError("application.live_trading_enabled must remain false for local research")
+
+    # Apply resource bounds to YAML workflows as well as the smaller API
+    # override surface.  Configuration is not a vehicle for arbitrary scale.
+    for section_name, section in (("learning", typed.learning), ("validation", typed.validation)):
+        if not isinstance(section, dict):
+            continue
+        search = section.get("search", {})
+        if isinstance(search, dict) and int(search.get("max_candidates", 5)) > 5:
+            raise ConfigurationValidationError(f"{section_name}.search.max_candidates must not exceed 5")
+        walk_forward = section.get("walk_forward", {})
+        if isinstance(walk_forward, dict):
+            for key, maximum in (("train_size", 10_000), ("test_size", 5_000), ("step_size", 5_000), ("min_windows", 100)):
+                if key in walk_forward and int(walk_forward[key]) > maximum:
+                    raise ConfigurationValidationError(f"{section_name}.walk_forward.{key} must not exceed {maximum}")
+        bootstrap = section.get("bootstrap", {})
+        if isinstance(bootstrap, dict) and int(bootstrap.get("samples", 1_000)) > 10_000:
+            raise ConfigurationValidationError(f"{section_name}.bootstrap.samples must not exceed 10000")
 
     warnings: list[str] = []
     if typed.backtest.position_fraction == 0:

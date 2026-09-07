@@ -10,7 +10,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Callable, NoReturn
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -48,6 +48,16 @@ class MarketDataProviderError(RuntimeError):
             "retryable": self.retryable,
             "fallback_used": self.fallback_used,
         }
+
+
+def _fixed_https_get(url: str, *, host: str, user_agent: str) -> bytes:
+    """Fetch a provider URL only after enforcing its fixed HTTPS destination."""
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != host:
+        raise MarketDataProviderError("PROVIDER_SECURITY_ERROR", "Provider endpoint is not an approved HTTPS destination.")
+    # Scheme and hostname are checked against a provider constant above.
+    with urlopen(Request(url, headers={"User-Agent": user_agent}), timeout=20) as response:  # nosec B310
+        return response.read()
 
 
 def _request_error(provider: str, error: BaseException) -> NoReturn:
@@ -201,8 +211,7 @@ class YahooFinanceProvider(MarketDataProvider):
     @staticmethod
     def _default_get(url: str) -> bytes:
         try:
-            with urlopen(Request(url, headers={"User-Agent": "FinAgent/0.8 historical-research"}), timeout=20) as response:
-                return response.read()
+            return _fixed_https_get(url, host="query1.finance.yahoo.com", user_agent="FinAgent/0.8 historical-research")
         except (HTTPError, URLError, TimeoutError, ConnectionError, OSError) as error:
             _request_error("yahoo_finance", error)
 
@@ -318,8 +327,7 @@ class TwelveDataProvider(MarketDataProvider):
     @staticmethod
     def _default_get(url: str) -> bytes:
         try:
-            with urlopen(Request(url, headers={"User-Agent": "FinAgent/1.0 historical-research"}), timeout=20) as response:
-                return response.read()
+            return _fixed_https_get(url, host="api.twelvedata.com", user_agent="FinAgent/1.0 historical-research")
         except (HTTPError, URLError, TimeoutError, ConnectionError, OSError) as error:
             _request_error("twelve_data", error)
 
@@ -475,8 +483,7 @@ class StooqProvider(MarketDataProvider):
     @staticmethod
     def _default_get(url: str) -> bytes:
         try:
-            with urlopen(Request(url, headers={"User-Agent": "FinAgent/1.0 historical-research"}), timeout=20) as response:
-                return response.read()
+            return _fixed_https_get(url, host="stooq.com", user_agent="FinAgent/1.0 historical-research")
         except (HTTPError, URLError, TimeoutError, ConnectionError, OSError) as error:
             _request_error("stooq", error)
 

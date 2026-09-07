@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from finagent.api.dependencies import get_service
+from finagent.api.security import audit_admin_action, require_admin, require_mutation_rate_limit
 from finagent.api.schemas import ExecutionResponse, PaginationMeta, RunRequest, ValidationDetail, ValidationListResponse
 from finagent.services.research_service import ResearchService
 
@@ -13,8 +14,13 @@ def validations(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=
     return {"items": items, "pagination": PaginationMeta(limit=limit, offset=offset, total=total)}
 
 
-@router.post("/validation/run", response_model=ExecutionResponse)
-def run(request: RunRequest, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+@router.post(
+    "/validation/run",
+    response_model=ExecutionResponse,
+    dependencies=[Depends(require_admin), Depends(require_mutation_rate_limit)],
+)
+def run(request: RunRequest, http_request: Request, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+    audit_admin_action(http_request, "ADMIN_VALIDATION_RUN")
     return service.run_validation(request.config_path)
 
 

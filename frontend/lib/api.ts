@@ -3,6 +3,11 @@
 const configuredApiBase = process.env.NEXT_PUBLIC_FINAGENT_API_URL?.replace(/\/$/, "");
 // Local development remains convenient; production must provide the public API URL at build time.
 export const apiBase = configuredApiBase ?? (process.env.NODE_ENV === "production" ? "" : "http://127.0.0.1:8000");
+// Browser bundles never receive the administrator key.  Hosted deployments
+// therefore remain intentionally read-only; administrators use the protected
+// backend API from a server-side/local tool with the header documented in
+// docs/SECURITY.md.
+export const publicMutationControlsEnabled = process.env.NODE_ENV !== "production";
 
 export type MetricMap = Record<string, number | null>;
 export type Pagination = { limit: number; offset: number; total: number };
