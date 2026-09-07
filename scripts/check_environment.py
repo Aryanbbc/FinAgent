@@ -45,7 +45,9 @@ def main() -> int:
         "frontend_dependencies": (PROJECT_ROOT / "frontend" / "node_modules").is_dir(),
         "python_dependencies": {name: importlib.util.find_spec(name) is not None for name in required_modules},
         "required_directories": {},
-        "environment": {name: bool(os.getenv(name)) for name in ("DATABASE_URL", "DATA_CACHE_PATH", "REPORTS_PATH", "FRONTEND_ORIGIN", "FINAGENT_ENV")},
+        # This reports only whether the backend-only credential is configured;
+        # the secret value is never printed or serialized.
+        "environment": {name: bool(os.getenv(name)) for name in ("DATABASE_URL", "DATA_CACHE_PATH", "REPORTS_PATH", "FRONTEND_ORIGIN", "FINAGENT_ENV", "TWELVE_DATA_API_KEY")},
         "runtime": {"environment": runtime.environment, "host": runtime.host, "port": runtime.port, "cors_origins": runtime.cors_origins},
         "database": Database(database_path).health_check(),
     }

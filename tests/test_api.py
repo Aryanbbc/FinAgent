@@ -83,7 +83,11 @@ def test_missing_artifacts_return_consistent_404(client: tuple[TestClient, str, 
 
 def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestClient, str, str]) -> None:
     api, _, _ = client
-    assert {item["provider"] for item in api.get("/api/data/providers").json()} >= {"auto", "local_csv", "stooq", "yahoo_finance"}
+    providers = api.get("/api/data/providers").json()
+    assert {item["provider"] for item in providers} >= {"auto", "local_csv", "stooq", "twelve_data", "yahoo_finance"}
+    twelve = next(item for item in providers if item["provider"] == "twelve_data")
+    assert twelve["requires_credentials"] is True
+    assert "api_key" not in twelve and "TWELVE_DATA_API_KEY" not in twelve
     fetched = api.post(
         "/api/data/fetch",
         json={

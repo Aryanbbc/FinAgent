@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -19,16 +20,16 @@ from finagent.database.db import Database  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch historical daily OHLCV data into FinAgent's local registry")
-    parser.add_argument("--provider", default="yahoo_finance", choices=("yahoo_finance", "local_csv"))
+    parser.add_argument("--provider", default="auto", choices=("auto", "twelve_data", "yahoo_finance", "stooq", "local_csv"))
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--start", required=True, help="ISO start date, inclusive")
-    parser.add_argument("--end", required=True, help="ISO end date, exclusive for Yahoo Finance")
+    parser.add_argument("--end", required=True, help="ISO end date")
     parser.add_argument("--interval", default="1d", choices=("1d",))
     parser.add_argument("--source-path", help="Local CSV path when --provider local_csv")
     parser.add_argument("--force-refresh", action="store_true")
     parser.add_argument("--missing-data-policy", default="reject", choices=[item.value for item in MissingDataPolicy])
-    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
-    parser.add_argument("--cache", default="data/cache")
+    parser.add_argument("--database", default=os.getenv("DATABASE_URL", "data/finagent.db"), help="SQLite path or PostgreSQL DATABASE_URL")
+    parser.add_argument("--cache", default=os.getenv("DATA_CACHE_PATH", "data/cache"))
     arguments = parser.parse_args()
     cache = Path(arguments.cache)
     if not cache.is_absolute(): cache = PROJECT_ROOT / cache

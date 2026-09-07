@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from finagent.data.manager import DatasetManager
-from finagent.data.market_provider import LocalCSVProvider, MarketDataProvider, MarketDataProviderError, ProviderRegistry, StooqProvider, YahooFinanceProvider
+from finagent.data.market_provider import LocalCSVProvider, MarketDataProvider, MarketDataProviderError, ProviderRegistry, StooqProvider, TwelveDataProvider, YahooFinanceProvider
 from finagent.data.models import AssetMetadata, MarketDataRequest, MissingDataPolicy
 from finagent.data.quality import DataValidationPipeline
 from finagent.data.registry import DatasetRegistry
@@ -73,6 +73,177 @@ def test_local_csv_provider_and_yahoo_adapter_normalize_without_live_internet() 
         provider.fetch_ohlcv(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03", interval="1h"))
     stooq = StooqProvider(lambda _: b"Date,Open,High,Low,Close,Volume\n2024-01-02,10,11,9,10.5,100\n")
     assert list(stooq.fetch_ohlcv(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03")).columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+def _twelve_payload(*, status: str = "ok", values: object | None = None, **extra: object) -> dict[str, object]:
+    return {
+        "status": status,
+        "meta": {"symbol": "AAPL", "instrument_name": "Apple Inc.", "exchange": "NASDAQ", "currency": "USD", "exchange_timezone": "America/New_York"},
+        "values": values if values is not None else [
+            {"datetime": "2022-01-04", "open": "180.00", "high": "182.00", "low": "179.00", "close": "181.00", "volume": "1000"},
+            {"datetime": "2022-01-03", "open": "178.00", "high": "181.00", "low": "177.00", "close": "180.00", "volume": "1100"},
+        ],
+        **extra,
+    }
+
+
+def test_twelve_data_daily_ohlcv_normalizes_and_preserves_provider_metadata() -> None:
+    requested_urls: list[str] = []
+
+    def response(url: str) -> bytes:
+        requested_urls.append(url)
+        return json.dumps(_twelve_payload()).encode("utf-8")
+
+    request = MarketDataRequest("AAPL", "2022-01-01", "2022-01-05")
+    provider = TwelveDataProvider(api_key="test-key", http_get=response)
+    frame = provider.fetch_ohlcv(request)
+    metadata = provider.fetch_metadata(request)
+
+    assert list(frame.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert frame["timestamp"].tolist() == ["2022-01-03", "2022-01-04"]
+    assert "interval=1day" in requested_urls[0] and "start_date=2022-01-01" in requested_urls[0]
+    assert metadata.provider_symbol == "AAPL"
+    assert metadata.adjustment_mode == "provider_adjustment_unspecified"
+
+
+@pytest.mark.parametrize(("payload", "expected_code", "expected_status", "retryable"), [
+    ({"status": "error", "code": 401, "message": "Invalid API key"}, "INVALID_API_KEY", 401, False),
+    ({"status": "error", "code": 429, "message": "API request limit reached"}, "RATE_LIMIT", 429, True),
+    ({"status": "error", "code": 400, "message": "The symbol DOESNOTEXIST does not exist."}, "SYMBOL_NOT_FOUND", 400, False),
+])
+def test_twelve_data_structures_key_rate_limit_and_symbol_errors_without_secret_leakage(
+    payload: dict[str, object], expected_code: str, expected_status: int, retryable: bool,
+) -> None:
+    secret = "unit-test-secret-must-not-appear"
+    provider = TwelveDataProvider(api_key=secret, http_get=lambda _: json.dumps(payload).encode("utf-8"))
+
+    with pytest.raises(MarketDataProviderError) as raised:
+        provider.fetch_ohlcv(MarketDataRequest("AAPL", "2022-01-01", "2023-01-01"))
+
+    assert raised.value.code == expected_code
+    assert raised.value.status == expected_status
+    assert raised.value.retryable is retryable
+    assert secret not in str(raised.value)
+    assert secret not in str(raised.value.details())
+
+
+def test_twelve_data_rejects_malformed_response_before_persistence() -> None:
+    malformed = _twelve_payload(values=[{"datetime": "2022-01-03", "open": "178.00"}])
+    provider = TwelveDataProvider(api_key="test-key", http_get=lambda _: json.dumps(malformed).encode("utf-8"))
+
+    with pytest.raises(MarketDataProviderError) as raised:
+        provider.fetch_ohlcv(MarketDataRequest("AAPL", "2022-01-01", "2023-01-01"))
+
+    assert raised.value.code == "PROVIDER_INVALID_RESPONSE"
+
+
+def test_twelve_data_network_failure_is_retryable_and_secret_safe() -> None:
+    secret = "unit-test-secret-must-not-appear"
+
+    def unavailable(_: str) -> bytes:
+        raise URLError("temporary network failure")
+
+    with pytest.raises(MarketDataProviderError) as raised:
+        TwelveDataProvider(api_key=secret, http_get=unavailable).fetch_ohlcv(
+            MarketDataRequest("AAPL", "2022-01-01", "2023-01-01")
+        )
+
+    assert raised.value.code == "PROVIDER_UNAVAILABLE"
+    assert raised.value.retryable is True
+    assert secret not in str(raised.value)
+
+
+def test_auto_uses_twelve_then_falls_back_and_persists_actual_provider_provenance(tmp_path: Path) -> None:
+    twelve = TwelveDataProvider(
+        api_key="test-key",
+        http_get=lambda _: json.dumps({"status": "error", "code": 429, "message": "API request limit reached"}).encode("utf-8"),
+    )
+    yahoo = SequencedProvider("yahoo_finance", [_frame()])
+    stooq = SequencedProvider("stooq", [_frame(close=11.0)])
+    manager = DatasetManager(
+        DatasetRegistry(Database(tmp_path / "datasets.db")),
+        tmp_path / "cache",
+        ProviderRegistry((twelve, yahoo, stooq)),
+        max_attempts=1,
+        sleep=lambda _: None,
+    )
+
+    result = manager.fetch("auto", MarketDataRequest("AAPL", "2022-01-01", "2023-01-01"))
+
+    assert result.actual_provider == "yahoo_finance" and result.fallback_used
+    assert yahoo.calls == 1 and stooq.calls == 0
+    assert result.attempts[0]["provider"] == "twelve_data"
+    assert result.dataset.metadata.requested_provider == "auto"
+    assert result.dataset.metadata.actual_provider == "yahoo_finance"
+    assert result.dataset.metadata.provider_symbol == "AAPL"
+    assert result.dataset.metadata.requested_interval == "1d"
+
+
+def test_auto_skips_unconfigured_twelve_data_and_uses_existing_provider_order(tmp_path: Path) -> None:
+    twelve = TwelveDataProvider(api_key="", http_get=lambda _: pytest.fail("unconfigured provider must not be called"))
+    yahoo = SequencedProvider("yahoo_finance", [_frame()])
+    manager = DatasetManager(
+        DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((twelve, yahoo)), sleep=lambda _: None,
+    )
+
+    result = manager.fetch("auto", MarketDataRequest("AAPL", "2022-01-01", "2023-01-01"))
+
+    assert result.actual_provider == "yahoo_finance" and not result.fallback_used
+
+
+def test_twelve_data_provenance_is_persisted_with_the_immutable_dataset_revision(tmp_path: Path) -> None:
+    provider = TwelveDataProvider(api_key="test-key", http_get=lambda _: json.dumps(_twelve_payload()).encode("utf-8"))
+    registry = DatasetRegistry(Database(tmp_path / "datasets.db"))
+    manager = DatasetManager(registry, tmp_path / "cache", ProviderRegistry((provider,)), sleep=lambda _: None)
+
+    result = manager.fetch("twelve_data", MarketDataRequest("AAPL", "2022-01-01", "2023-01-01"))
+    persisted = registry.latest(result.dataset.dataset_id)
+
+    assert persisted.metadata.requested_provider == "twelve_data"
+    assert persisted.metadata.actual_provider == "twelve_data"
+    assert persisted.metadata.provider_symbol == "AAPL"
+    assert persisted.metadata.requested_date_range == {"start_date": "2022-01-01", "end_date": "2023-01-01"}
+    assert persisted.metadata.requested_interval == "1d"
+    assert persisted.metadata.fetch_timestamp is not None
+
+
+def test_auto_reports_structured_failure_when_twelve_data_and_fallback_both_fail(tmp_path: Path) -> None:
+    twelve = TwelveDataProvider(
+        api_key="test-key",
+        http_get=lambda _: json.dumps({"status": "error", "code": 429, "message": "API request limit reached"}).encode("utf-8"),
+    )
+    yahoo = SequencedProvider("yahoo_finance", [MarketDataProviderError("PROVIDER_UNAVAILABLE", "Yahoo unavailable", provider="yahoo_finance", status=503, retryable=True)])
+    manager = DatasetManager(
+        DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((twelve, yahoo)), max_attempts=1, sleep=lambda _: None,
+    )
+
+    with pytest.raises(MarketDataProviderError) as raised:
+        manager.fetch("auto", MarketDataRequest("AAPL", "2022-01-01", "2023-01-01"))
+
+    assert raised.value.code == "ALL_PROVIDERS_FAILED"
+    assert raised.value.details()["provider"] == "auto"
+    assert "twelve_data: The Twelve Data rate limit was reached." in str(raised.value.details()["reason"])
+    assert "yahoo_finance: Yahoo unavailable" in str(raised.value.details()["reason"])
+
+
+def test_twelve_data_cache_hit_avoids_a_second_provider_request(tmp_path: Path) -> None:
+    calls = 0
+
+    def response(_: str) -> bytes:
+        nonlocal calls
+        calls += 1
+        return json.dumps(_twelve_payload()).encode("utf-8")
+
+    provider = TwelveDataProvider(api_key="test-key", http_get=response)
+    manager = DatasetManager(
+        DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((provider,)), sleep=lambda _: None,
+    )
+    request = MarketDataRequest("AAPL", "2022-01-01", "2022-01-05")
+    first = manager.fetch("twelve_data", request)
+    cached = manager.fetch("twelve_data", request)
+
+    assert not first.cache_hit and cached.cache_hit
+    assert calls == 1 and cached.actual_provider == "twelve_data"
 
 
 @pytest.mark.parametrize(("failure", "expected_code", "expected_status"), [

@@ -60,8 +60,10 @@ class AssetMetadata:
     # automatic provider fallback transparent to research consumers.
     requested_provider: str | None = None
     actual_provider: str | None = None
+    provider_symbol: str | None = None
     fetch_timestamp: str | None = None
     requested_date_range: dict[str, str] | None = None
+    requested_interval: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,8 +76,10 @@ class AssetMetadata:
             "adjustment_mode": self.adjustment_mode,
             "requested_provider": self.requested_provider,
             "actual_provider": self.actual_provider,
+            "provider_symbol": self.provider_symbol,
             "fetch_timestamp": self.fetch_timestamp,
             "requested_date_range": self.requested_date_range,
+            "requested_interval": self.requested_interval,
         }
 
 

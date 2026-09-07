@@ -22,7 +22,7 @@ Use `scripts/list_datasets.py` and `scripts/validate_dataset.py`. Review provide
 
 ## A provider reports an error
 
-Yahoo is a public historical-data dependency and may rate-limit, change availability, or reject symbols. Retry later or use a bundled/local CSV. Provider failures are historical-data errors only; no trading action is attempted.
+For reliable deployed daily data, set `TWELVE_DATA_API_KEY` only in the Render backend environment, redeploy, then use `twelve_data` or `auto`. The key must not appear in Vercel settings, `NEXT_PUBLIC_*`, logs, reports, or committed files. A malformed/missing key produces a structured provider error without revealing the secret. Yahoo and Stooq are optional public fallbacks and may rate-limit, block programmatic requests, change availability, or reject symbols. Retry later, use Auto, or use a bundled/local CSV where appropriate. Provider failures are historical-data errors only; no trading action is attempted.
 
 ## npm or Python dependency issue
 

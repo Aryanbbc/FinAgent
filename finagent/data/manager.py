@@ -50,7 +50,7 @@ class DatasetManager:
         self._sleep = sleep
 
     def fetch(self, provider_name: str, request: MarketDataRequest, policy: MissingDataPolicy = MissingDataPolicy.REJECT) -> DatasetFetchResult:
-        candidates = self.providers.candidates(provider_name)
+        candidates = self.providers.candidates(provider_name, request)
         # Validate before looking at the cache so invalid requests cannot reuse
         # a historical revision merely because its identifier happens to match.
         candidates[0].validate_request(request)
@@ -69,7 +69,8 @@ class DatasetManager:
                         True,
                         provider_name,
                         actual_provider,
-                        provider_name == self.providers.auto_provider and actual_provider != "yahoo_finance",
+                        provider_name == self.providers.auto_provider
+                        and not self.providers.is_primary_auto_provider(actual_provider, request),
                     )
             except LookupError:
                 pass
@@ -92,12 +93,15 @@ class DatasetManager:
             temporary.replace(cache_path)
         else:
             cache_path = Path(previous.cache_path)
+        provider_metadata = provider.fetch_metadata(request)
         metadata = replace(
-            provider.fetch_metadata(request),
+            provider_metadata,
             requested_provider=provider_name,
             actual_provider=provider.provider_name,
+            provider_symbol=provider_metadata.provider_symbol or request.symbol,
             fetch_timestamp=datetime.now(UTC).isoformat(),
             requested_date_range={"start_date": request.start_date, "end_date": request.end_date},
+            requested_interval=request.interval,
         )
         dataset = self.registry.save_version(
             dataset_id=dataset_id, provider=provider.provider_name, symbol=request.symbol, interval=request.interval,

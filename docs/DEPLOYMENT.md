@@ -49,6 +49,7 @@ Set these API environment variables:
 | `FINAGENT_ENV` | `production` |
 | `FRONTEND_ORIGIN` | exact Vercel production origin, for example `https://fin-agent-iota.vercel.app` |
 | `DATABASE_URL` | Render PostgreSQL **Internal Database URL** (Blueprint: supplied automatically) |
+| `TWELVE_DATA_API_KEY` | Twelve Data API key, set as a Render secret; backend-only, never expose it to Vercel or browser code |
 | `DATA_CACHE_PATH` | `/tmp/finagent-cache` |
 | `REPORTS_PATH` | `/tmp/finagent-reports` |
 | `LIVE_TRADING_ENABLED` | `false` |
@@ -110,16 +111,26 @@ It uses credentials, all methods, and all headers, but never wildcard origins. S
 ## First production workflow: real data to experiment
 
 1. Open the deployed **Data** page.
-2. Select the existing `yahoo_finance` historical provider, enter a symbol and bounded historical date range, then fetch it. Do not set `source_path` in production; that option is for a checked-in local CSV.
-3. Confirm the created dataset appears in **Data** and that its sample rows load. This stores provenance, validation output, metadata, and normalized OHLCV rows in PostgreSQL.
-4. Run a controlled experiment with the returned `dataset_id` using `POST /api/experiments/run`, for example:
+2. In Render, create a Twelve Data API key and set it only as `TWELVE_DATA_API_KEY` on the API service. Redeploy after saving it. It must not be added to Vercel, `NEXT_PUBLIC_*`, a report, or the repository.
+3. Open the deployed **Data** page, select `Auto` (or `Twelve Data` to require that source), then fetch `AAPL`, `2022-01-01` through `2023-01-01` at daily interval. Do not set `source_path` in production; that option is for a checked-in local CSV. Auto tries configured Twelve Data first, then Yahoo Finance, Stooq, and a supplied local CSV only after retryable failures.
+4. Confirm more than 100 valid rows appear and that the dataset's metadata reports requested provider, actual provider, provider symbol, fetch timestamp, date range, interval, and adjustment mode. This stores provenance, validation output, metadata, and normalized OHLCV rows in PostgreSQL.
+5. Run a controlled experiment with the returned `dataset_id` using `POST /api/experiments/run`, for example:
 
    ```json
-   {"config_path":"config/experiments.yaml","dataset_id":"DATA-YAHOO-FINANCE-AAPL-1D"}
+   {"config_path":"config/experiments.yaml","dataset_id":"DATA-AUTO-AAPL-1D"}
    ```
 
    The dataset ID must be the value returned by the fetch request; it is not a guessed ticker string.
-5. Open **Experiments** and the experiment detail. Trades, metrics, regime observations, agent decisions, critic/memory records, manifests, validation evidence, candidates, and promotion history are all written to PostgreSQL by their existing controlled workflows.
+6. Open **Experiments** and the experiment detail. Trades, metrics, regime observations, agent decisions, critic/memory records, manifests, validation evidence, candidates, and promotion history are all written to PostgreSQL by their existing controlled workflows.
+
+From a Render shell (or another backend environment with the same secret and `DATABASE_URL`), the provider smoke check is:
+
+```bash
+.venv/bin/python scripts/smoke_market_data.py \
+  --provider twelve_data --symbol AAPL --start 2022-01-01 --end 2023-01-01
+```
+
+It prints requested/actual provider, provider symbol, rows received, date range, dataset ID, and validation status without printing credentials. A Twelve Data account's plan/credits and symbol coverage remain external-provider constraints.
 
 ## Local development remains SQLite
 
@@ -142,7 +153,7 @@ For PostgreSQL backups and point-in-time recovery, use Render Postgres operation
 
 1. Check `/api/health` reports `postgresql`, `ok`, and `true` connectivity.
 2. Check `/docs` loads.
-3. Fetch a real historical dataset through the Data API/UI.
+3. Fetch a real historical dataset through the Data API/UI, preferably with configured Twelve Data for reliable production use.
 4. Run a controlled historical experiment referencing that dataset ID.
 5. Refresh the service, then revisit the dataset and experiment to confirm that PostgreSQL—not the temporary cache—retained the data.
 6. Open the Vercel UI and confirm browser requests target the Render HTTPS URL with no CORS errors.

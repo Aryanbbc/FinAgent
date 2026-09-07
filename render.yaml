@@ -16,6 +16,8 @@ services:
         fromDatabase:
           name: finagent-postgres
           property: connectionString
+      - key: TWELVE_DATA_API_KEY
+        sync: false
       - key: DATA_CACHE_PATH
         value: /tmp/finagent-cache
       - key: REPORTS_PATH

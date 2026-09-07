@@ -14,7 +14,7 @@ Historical strategy research is easy to make irreproducible: data can change, co
 - Causal rule-based market-regime detection and structured Technical → Regime → Strategy → Risk decisions.
 - Deterministic Critic Agent and experiment memory; configuration-only, explicit V0.5 candidate evaluation.
 - Opt-in V0.6 multi-asset, walk-forward, leakage, sensitivity, bootstrap, ablation, benchmark, and robustness diagnostics.
-- Historical-data adapters, normalization, quality checks, deterministic cache paths, immutable revisions, collections, and durable PostgreSQL-backed OHLCV storage for production.
+- Historical-data adapters, including backend-keyed Twelve Data with Yahoo Finance, Stooq, and local CSV fallback options; normalization, quality checks, deterministic cache paths, immutable revisions, collections, and durable PostgreSQL-backed OHLCV storage for production.
 - FastAPI with typed schemas, pagination/filtering, request IDs, structured errors, local health state, and OpenAPI docs.
 - Next.js research workspace with dashboard, explorer, data quality, charts, reports, errors/empty/loading states, and responsive navigation.
 - Demo seed, environment check, safe SQLite health/backup/export commands, and one-command local startup.
@@ -109,7 +109,7 @@ Fetch/register bundled or public historical daily data:
 .venv/bin/python scripts/validate_dataset.py --dataset DATA-LOCAL-CSV-EXAMPLE-1D
 ```
 
-The `yahoo_finance` adapter is historical-data only and can be rate-limited. Tests never call it live.
+For deployed historical-data ingestion, configure `TWELVE_DATA_API_KEY` only in the backend environment and select `auto` or `twelve_data`; the provider records actual-source provenance with every immutable revision. Yahoo Finance and Stooq remain optional public fallbacks and can be rate-limited or unavailable. Tests never call providers live. See [deployment instructions](docs/DEPLOYMENT.md) for the production AAPL smoke command.
 
 ## API
 
@@ -192,7 +192,7 @@ tests/                 deterministic Python tests
 
 ## Limitations and roadmap
 
-FinAgent works with historical data and deterministic rules. It does not model all market frictions, guarantee future results, provide real-time data, authenticate users, or execute paper/live trades. Yahoo historical availability is outside this project’s control. SQLite is retained for a single local user; managed PostgreSQL supports the documented Render deployment but does not turn FinAgent into a multi-user trading service.
+FinAgent works with historical data and deterministic rules. It does not model all market frictions, guarantee future results, provide real-time data, authenticate users, or execute paper/live trades. Third-party historical-provider availability, plan limits, and coverage remain outside this project’s control. SQLite is retained for a single local user; managed PostgreSQL supports the documented Render deployment but does not turn FinAgent into a multi-user trading service.
 
 Future work should remain evidence-driven and preserve reproducibility. It must not silently add LLM trading agents, reinforcement learning, sentiment analysis, brokerage integration, live/paper trading, authentication, or payments without an explicit versioned scope change.
 

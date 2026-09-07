@@ -237,6 +237,7 @@ class DataProviderResponse(APIModel):
     historical_only: bool
     intervals: list[str]
     requires_credentials: bool
+    available: bool
 
 
 class DatasetSummary(APIModel):
