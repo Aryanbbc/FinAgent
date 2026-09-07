@@ -20,14 +20,13 @@ from finagent.database.db import Database  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate a registered FinAgent historical dataset")
     parser.add_argument("--dataset", required=True)
-    parser.add_argument("--database", default="data/finagent.db")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     parser.add_argument("--cache", default="data/cache")
     parser.add_argument("--missing-data-policy", default="reject", choices=[item.value for item in MissingDataPolicy])
     arguments = parser.parse_args()
-    database, cache = Path(arguments.database), Path(arguments.cache)
-    if not database.is_absolute(): database = PROJECT_ROOT / database
+    cache = Path(arguments.cache)
     if not cache.is_absolute(): cache = PROJECT_ROOT / cache
-    dataset = DatasetManager(DatasetRegistry(Database(database)), cache).validate(arguments.dataset, MissingDataPolicy(arguments.missing_data_policy))
+    dataset = DatasetManager(DatasetRegistry(Database(arguments.database, PROJECT_ROOT)), cache).validate(arguments.dataset, MissingDataPolicy(arguments.missing_data_policy))
     print(f"Dataset:       {dataset.dataset_id} / {dataset.version_id}")
     print(f"Status:        {dataset.validation.status.value}")
     print(f"Quality score: {dataset.validation.quality.score:.3f}")

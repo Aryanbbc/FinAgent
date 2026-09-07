@@ -21,19 +21,16 @@ from finagent.utils.logging import configure_logging, log_event  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export a FinAgent Markdown research report")
     parser.add_argument("--experiment", required=True, help="Persisted EXP-XXXXXX identifier")
-    parser.add_argument("--database", default="data/finagent.db", help="SQLite database path")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     parser.add_argument("--output", help="Markdown output path (defaults under reports/)")
     arguments = parser.parse_args()
-    database_path = Path(arguments.database)
-    if not database_path.is_absolute():
-        database_path = PROJECT_ROOT / database_path
     report_root = Path(os.getenv("REPORTS_PATH", "reports"))
     if not report_root.is_absolute():
         report_root = PROJECT_ROOT / report_root
     output_path = Path(arguments.output) if arguments.output else report_root / f"{arguments.experiment}_research_report.md"
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_path
-    output = ResearchReportExporter(ExperimentRepository(Database(database_path))).export(arguments.experiment, output_path)
+    output = ResearchReportExporter(ExperimentRepository(Database(arguments.database, PROJECT_ROOT))).export(arguments.experiment, output_path)
     log_event(configure_logging(), "REPORT_EXPORTED", artifact_id=arguments.experiment, workflow="report_export")
     print(f"Research report exported: {output}")
     return 0

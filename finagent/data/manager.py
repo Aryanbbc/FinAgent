@@ -37,7 +37,11 @@ class DatasetManager:
         if not request.force_refresh:
             try:
                 cached = self.registry.latest(dataset_id)
-                if cached.validation.status.value != "invalid" and Path(cached.cache_path).is_file() and self._cached_covers(cached, request):
+                if (
+                    cached.validation.status.value != "invalid"
+                    and (self.registry.has_ohlcv(cached.version_id) or Path(cached.cache_path).is_file())
+                    and self._cached_covers(cached, request)
+                ):
                     return DatasetFetchResult(cached, True)
             except LookupError:
                 pass
@@ -66,11 +70,18 @@ class DatasetManager:
             start_date=str(frame["timestamp"].iloc[0].date()), end_date=str(frame["timestamp"].iloc[-1].date()),
             row_count=len(frame), cache_path=cache_path, checksum=checksum, validation=validation, metadata=metadata,
         )
+        # The CSV cache remains a local-development convenience.  The immutable
+        # canonical rows make production datasets durable across Render restarts.
+        self.registry.store_ohlcv(dataset.version_id, frame)
         return DatasetFetchResult(dataset, False)
 
     def validate(self, dataset_id: str, policy: MissingDataPolicy = MissingDataPolicy.REJECT) -> DatasetVersion:
         dataset = self.registry.latest(dataset_id)
-        frame = pd.read_csv(dataset.cache_path)
+        frame = (
+            self.registry.load_ohlcv(dataset.version_id)
+            if self.registry.has_ohlcv(dataset.version_id)
+            else pd.read_csv(dataset.cache_path)
+        )
         _, validation = self.pipeline.prepare(frame, policy)
         return self.registry.save_version(
             dataset_id=dataset.dataset_id, provider=dataset.provider, symbol=dataset.symbol, interval=dataset.interval,

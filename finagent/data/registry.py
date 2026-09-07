@@ -1,4 +1,4 @@
-"""SQLite-backed immutable dataset revisions and named collection registry."""
+"""Portable immutable dataset revisions, OHLCV rows, and named collections."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pandas as pd
 
 from finagent.data.models import AssetMetadata, DatasetCollection, DatasetValidationResult, DatasetVersion
 from finagent.database.db import Database
@@ -74,9 +76,26 @@ class DatasetRegistry:
                     FOREIGN KEY(dataset_id) REFERENCES datasets(dataset_id),
                     FOREIGN KEY(version_id) REFERENCES dataset_versions(version_id)
                 );
+                CREATE TABLE IF NOT EXISTS dataset_ohlcv_rows (
+                    version_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume REAL NOT NULL,
+                    PRIMARY KEY(version_id, timestamp),
+                    FOREIGN KEY(version_id) REFERENCES dataset_versions(version_id) ON DELETE CASCADE
+                );
                 CREATE INDEX IF NOT EXISTS idx_dataset_versions_refreshed ON dataset_versions(last_refreshed_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_dataset_versions_filters ON dataset_versions(provider, symbol, validation_json);
+                CREATE INDEX IF NOT EXISTS idx_dataset_ohlcv_rows_version_timestamp ON dataset_ohlcv_rows(version_id, timestamp);
                 """
+            )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?) "
+                "ON CONFLICT(version) DO NOTHING",
+                ("datasets-1", datetime.now(UTC).isoformat()),
             )
 
     @staticmethod
@@ -119,7 +138,7 @@ class DatasetRegistry:
             clauses.append("version.symbol = ?")
             parameters.append(symbol)
         if status:
-            clauses.append("json_extract(version.validation_json, '$.status') = ?")
+            clauses.append(f"{self.database.json_text('version.validation_json', ('status',))} = ?")
             parameters.append(status)
         if start_date:
             clauses.append("version.end_date >= ?")
@@ -176,7 +195,8 @@ class DatasetRegistry:
             number = int(number_row["number"]) + 1
             version_id = f"{dataset_id}-V{number:03d}"
             connection.execute(
-                "INSERT OR IGNORE INTO datasets (dataset_id, provider, symbol, interval, created_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO datasets (dataset_id, provider, symbol, interval, created_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(dataset_id) DO NOTHING",
                 (dataset_id, provider, symbol, interval, now),
             )
             connection.execute(
@@ -201,7 +221,9 @@ class DatasetRegistry:
         members = [(dataset_id, self.latest(dataset_id).version_id) for dataset_id in dataset_ids]
         with self.database.connect() as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO dataset_collections (collection_id, name, description, created_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO dataset_collections (collection_id, name, description, created_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(collection_id) DO UPDATE SET name = EXCLUDED.name, "
+                "description = EXCLUDED.description, created_at = EXCLUDED.created_at",
                 (collection_id, name, description, now),
             )
             connection.execute("DELETE FROM dataset_collection_members WHERE collection_id = ?", (collection_id,))
@@ -245,6 +267,48 @@ class DatasetRegistry:
     def collection_count(self) -> int:
         with self.database.connect() as connection:
             return int(connection.execute("SELECT COUNT(*) AS count FROM dataset_collections").fetchone()["count"])
+
+    def has_ohlcv(self, version_id: str) -> bool:
+        """Return whether immutable OHLCV rows are available independently of the local cache."""
+        with self.database.connect() as connection:
+            return connection.execute(
+                "SELECT 1 FROM dataset_ohlcv_rows WHERE version_id = ? LIMIT 1", (version_id,)
+            ).fetchone() is not None
+
+    def store_ohlcv(self, version_id: str, frame: pd.DataFrame) -> None:
+        """Persist canonical historical rows atomically for cloud-safe dataset retrieval."""
+        required = ("timestamp", "open", "high", "low", "close", "volume")
+        missing = [column for column in required if column not in frame.columns]
+        if missing:
+            raise ValueError(f"Cannot persist OHLCV rows without columns: {', '.join(missing)}")
+        rows = [
+            (
+                version_id,
+                pd.Timestamp(item["timestamp"]).isoformat(),
+                float(item["open"]), float(item["high"]), float(item["low"]),
+                float(item["close"]), float(item["volume"]),
+            )
+            for item in frame.loc[:, list(required)].to_dict(orient="records")
+        ]
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM dataset_ohlcv_rows WHERE version_id = ?", (version_id,))
+            connection.executemany(
+                "INSERT INTO dataset_ohlcv_rows (version_id, timestamp, open, high, low, close, volume) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
+    def load_ohlcv(self, version_id: str) -> pd.DataFrame:
+        """Load database-backed canonical OHLCV rows, preserving chronological order."""
+        frame = self.database.fetch_dataframe(
+            "SELECT timestamp, open, high, low, close, volume FROM dataset_ohlcv_rows "
+            "WHERE version_id = ? ORDER BY timestamp",
+            (version_id,),
+        )
+        if frame.empty:
+            raise DatasetNotFoundError(f"OHLCV rows not found for dataset version: {version_id}")
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+        return frame
 
     @staticmethod
     def _version_from_row(row: object) -> DatasetVersion:

@@ -12,6 +12,10 @@ Start FastAPI first. Check `frontend/.env.local`; the default API is `http://127
 
 Close other local processes using the same database and run `.venv/bin/python scripts/database_maintenance.py health`. FinAgent waits briefly for a lock and uses WAL mode, but SQLite remains a single-machine database. Back up before manual investigation.
 
+## PostgreSQL deployment cannot connect
+
+Confirm `DATABASE_URL` starts with `postgresql://` or `postgres://`, and use the Render **Internal Database URL** from a Web Service in the same region. Redeploy after updating the environment variable. `/api/health` should report `database_backend: "postgresql"` and `database_connectivity: true`; startup logs identify malformed URLs, unavailable databases, and failed schema initialization. The SQLite backup command is deliberately not a PostgreSQL backup mechanism.
+
 ## Dataset is missing or invalid
 
 Use `scripts/list_datasets.py` and `scripts/validate_dataset.py`. Review provider, coverage, checksum, adjustment mode, quality score, and issues on the Data page. Re-register a local CSV with `scripts/fetch_data.py`; the registry creates a new immutable revision only when content changes.

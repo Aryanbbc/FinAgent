@@ -2,6 +2,7 @@ services:
   - type: web
     name: finagent-api
     runtime: python
+    region: oregon
     plan: 0.5c-512mb
     buildCommand: pip install -e ".[api]"
     startCommand: uvicorn finagent.api.main:app --host 0.0.0.0 --port $PORT
@@ -12,14 +13,19 @@ services:
       - key: FRONTEND_ORIGIN
         sync: false
       - key: DATABASE_URL
-        value: sqlite:////var/data/finagent.db
+        fromDatabase:
+          name: finagent-postgres
+          property: connectionString
       - key: DATA_CACHE_PATH
-        value: /var/data/cache
+        value: /tmp/finagent-cache
       - key: REPORTS_PATH
-        value: /var/data/reports
+        value: /tmp/finagent-reports
       - key: LIVE_TRADING_ENABLED
         value: "false"
-    disk:
-      name: finagent-data
-      mountPath: /var/data
-      sizeGB: 1
+databases:
+  - name: finagent-postgres
+    region: oregon
+    plan: 0.1c-256mb
+    databaseName: finagent
+    user: finagent
+    diskSizeGB: 1

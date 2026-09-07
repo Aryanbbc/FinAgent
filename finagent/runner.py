@@ -136,21 +136,28 @@ def run_experiment(
     config_path: str | Path,
     project_root: str | Path,
     logger: logging.Logger | None = None,
+    database_url: str | Path | None = None,
+    configuration_overrides: Mapping[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run, evaluate, persist, critique, manifest, and return a V0.1–V0.6 historical experiment."""
     root = Path(project_root)
     configuration = load_configuration(config_path, root)
+    if configuration_overrides:
+        configuration = _deep_merge(copy.deepcopy(configuration), configuration_overrides)
+        validate_research_configuration(configuration)
+    if database_url is not None:
+        # API-triggered research always persists into the configured service database,
+        # rather than the example SQLite path embedded in a YAML template.
+        configuration["database_path"] = str(database_url)
     experiment_config = configuration["experiment"]
     backtest_config = configuration.get("backtest", {})
     asset = str(experiment_config.get("asset") or "")
-    database_value = configuration.get("database_path", "data/finagent.db")
-    database_path = Path(database_value)
-    if not database_path.is_absolute():
-        database_path = root / database_path
+    database = Database(configuration.get("database_path", "data/finagent.db"), root)
     dataset_provenance: dict[str, Any] | None = None
     dataset_id = experiment_config.get("dataset_id")
     if dataset_id:
-        dataset_record = DatasetRegistry(Database(database_path)).latest(str(dataset_id))
+        dataset_registry = DatasetRegistry(database)
+        dataset_record = dataset_registry.latest(str(dataset_id))
         dataset_value = str(dataset_id)
         dataset_path = Path(dataset_record.cache_path)
         asset = str(experiment_config.get("asset") or dataset_record.symbol)
@@ -177,7 +184,11 @@ def run_experiment(
 
     if logger:
         logger.info("event=EXPERIMENT_STARTED asset=%s strategy=%s", asset, configuration["strategy"]["name"])
-    market_data = CSVDataLoader().load(dataset_path)
+    market_data = (
+        dataset_registry.load_ohlcv(dataset_record.version_id)
+        if dataset_id and dataset_registry.has_ohlcv(dataset_record.version_id)
+        else CSVDataLoader().load(dataset_path)
+    )
     if logger:
         logger.info("event=DATA_LOADED rows=%s dataset=%s", len(market_data), dataset_path)
     featured_data = FeaturePipeline(int(backtest_config.get("annualization_factor", 252))).generate(
@@ -247,7 +258,7 @@ def run_experiment(
         },
         "dataset_provenance": dataset_provenance,
     }
-    repository = ExperimentRepository(Database(database_path))
+    repository = ExperimentRepository(database)
     experiment_id = repository.save_experiment(
         strategy=strategy.name,
         asset=asset,

@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
@@ -18,6 +19,7 @@ from finagent.api.settings import Settings
 from finagent.configuration import ConfigurationValidationError
 from finagent.data.market_provider import MarketDataProviderError
 from finagent.data.registry import DatasetNotFoundError
+from finagent.database.db import DatabaseError
 from finagent.services.research_service import InvalidConfigurationError, NotFoundError, ResearchService
 from finagent.utils.logging import configure_logging, log_event
 
@@ -25,8 +27,28 @@ from finagent.utils.logging import configure_logging, log_event
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime = settings or Settings()
     logger = configure_logging()
-    app = FastAPI(title="FinAgent Research API", version="1.0.0", description="Deterministic historical research, dataset management, and controlled V0.1–V0.9 workflow access. No trading execution is available.")
-    app.state.research_service = ResearchService(runtime)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        """Verify the selected backend and idempotent schema before accepting requests."""
+        try:
+            application.state.research_service.ensure_database_ready()
+        except DatabaseError as error:
+            logger.error("event=DATABASE_STARTUP_FAILED backend=%s error=%s", runtime.database_backend, error)
+            raise RuntimeError(f"FinAgent database startup failed ({runtime.database_backend}): {error}") from error
+        yield
+
+    app = FastAPI(
+        title="FinAgent Research API",
+        version="1.0.0",
+        description="Deterministic historical research, dataset management, and controlled V0.1–V0.9 workflow access. No trading execution is available.",
+        lifespan=lifespan,
+    )
+    try:
+        app.state.research_service = ResearchService(runtime)
+    except DatabaseError as error:
+        logger.error("event=DATABASE_INITIALIZATION_FAILED backend=%s error=%s", runtime.database_backend, error)
+        raise RuntimeError(f"FinAgent database startup failed ({runtime.database_backend}): {error}") from error
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(runtime.cors_origins),
@@ -90,8 +112,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return error_response(request, 422, "REQUEST_VALIDATION_ERROR", "Request validation failed", error.errors())
 
     @app.exception_handler(sqlite3.Error)
-    async def database_error(request: Request, error: sqlite3.Error) -> JSONResponse:
-        return error_response(request, 503, "DATABASE_UNAVAILABLE", "The local database is temporarily unavailable")
+    @app.exception_handler(DatabaseError)
+    async def database_error(request: Request, error: sqlite3.Error | DatabaseError) -> JSONResponse:
+        return error_response(request, 503, "DATABASE_UNAVAILABLE", "The configured research database is temporarily unavailable")
 
     @app.exception_handler(ValueError)
     async def value_error(request: Request, error: ValueError) -> JSONResponse:

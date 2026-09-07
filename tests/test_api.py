@@ -97,3 +97,9 @@ def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestCl
     detail = api.get(f"/api/data/datasets/{dataset_id}")
     assert detail.status_code == 200 and detail.json()["sample_rows"]
     assert api.post("/api/data/validate", json={"dataset_id": dataset_id}).status_code == 200
+    # Controlled API runs bind to Settings.DATABASE_URL and can select durable
+    # registry data instead of relying on a YAML-configured local CSV path.
+    run = api.post("/api/experiments/run", json={"config_path": "config/experiments.yaml", "dataset_id": dataset_id})
+    assert run.status_code == 200
+    assert run.json()["metadata"]["dataset_id"] == dataset_id
+    assert api.get(f"/api/experiments/{run.json()['experiment_id']}").status_code == 200

@@ -108,11 +108,13 @@ def test_unknown_origin_does_not_receive_cors_permission(tmp_path: Path) -> None
     assert "access-control-allow-origin" not in response.headers
 
 
-def test_render_blueprint_uses_platform_port_and_persistent_disk() -> None:
+def test_render_blueprint_uses_platform_port_and_managed_postgresql() -> None:
     blueprint = yaml.safe_load((PROJECT_ROOT / "render.yaml").read_text(encoding="utf-8"))
     service = blueprint["services"][0]
     assert service["runtime"] == "python"
     assert service["startCommand"] == "uvicorn finagent.api.main:app --host 0.0.0.0 --port $PORT"
     assert service["healthCheckPath"] == "/api/health"
-    assert service["disk"]["mountPath"] == "/var/data"
     assert {entry["key"] for entry in service["envVars"]} >= {"FINAGENT_ENV", "FRONTEND_ORIGIN", "DATABASE_URL"}
+    database_url = next(entry for entry in service["envVars"] if entry["key"] == "DATABASE_URL")
+    assert database_url["fromDatabase"] == {"name": "finagent-postgres", "property": "connectionString"}
+    assert blueprint["databases"][0]["name"] == "finagent-postgres"

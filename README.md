@@ -14,11 +14,11 @@ Historical strategy research is easy to make irreproducible: data can change, co
 - Causal rule-based market-regime detection and structured Technical → Regime → Strategy → Risk decisions.
 - Deterministic Critic Agent and experiment memory; configuration-only, explicit V0.5 candidate evaluation.
 - Opt-in V0.6 multi-asset, walk-forward, leakage, sensitivity, bootstrap, ablation, benchmark, and robustness diagnostics.
-- Historical-data adapters, normalization, quality checks, deterministic cache paths, immutable SQLite dataset revisions, and collections.
+- Historical-data adapters, normalization, quality checks, deterministic cache paths, immutable revisions, collections, and durable PostgreSQL-backed OHLCV storage for production.
 - FastAPI with typed schemas, pagination/filtering, request IDs, structured errors, local health state, and OpenAPI docs.
 - Next.js research workspace with dashboard, explorer, data quality, charts, reports, errors/empty/loading states, and responsive navigation.
 - Demo seed, environment check, safe SQLite health/backup/export commands, and one-command local startup.
-- Deployment-ready FastAPI binding, explicit CORS origins, Render Blueprint, Vercel environment wiring, and persistent-disk documentation.
+- Deployment-ready FastAPI binding, explicit CORS origins, Render PostgreSQL Blueprint, Vercel environment wiring, and managed-database documentation.
 - Fixed V1.0 release validation: two bundled fixtures, causal multi-asset walk-forward evaluation, leakage checks, sensitivity, bootstrap intervals, ablation, an explicit benchmark suite, and portable CSV/SVG/Markdown/JSON exports.
 
 ## Screenshots
@@ -156,7 +156,7 @@ flowchart TD
   agents --> backtest
   backtest --> evidence[Metrics, benchmarks, critique, memory]
   evidence --> validation[Explicit validation and release exports]
-  validation --> storage[SQLite + Markdown/CSV/SVG/JSON]
+  validation --> storage[SQLite local / PostgreSQL production + Markdown/CSV/SVG/JSON]
   storage --> surfaces[FastAPI · Next.js · CLI · Streamlit]
 ```
 
@@ -170,7 +170,7 @@ config/                defaults, runnable examples, and safe demo configuration
 scripts/               CLI runners, data tools, demo seed, health and maintenance tools
 frontend/              Next.js local research workspace
 dashboard/             legacy/debug Streamlit view
-data/                  bundled sample data, local cache, and SQLite database
+data/                  bundled sample data, local cache, and SQLite local database
 docs/                  architecture, methodology, development, troubleshooting
 tests/                 deterministic Python tests
 ```
@@ -192,7 +192,7 @@ tests/                 deterministic Python tests
 
 ## Limitations and roadmap
 
-FinAgent works with historical data and deterministic rules. It does not model all market frictions, guarantee future results, provide real-time data, authenticate users, run in the cloud, or execute paper/live trades. Yahoo historical availability is outside this project’s control. SQLite is appropriate for a single local user, not concurrent multi-user deployment.
+FinAgent works with historical data and deterministic rules. It does not model all market frictions, guarantee future results, provide real-time data, authenticate users, or execute paper/live trades. Yahoo historical availability is outside this project’s control. SQLite is retained for a single local user; managed PostgreSQL supports the documented Render deployment but does not turn FinAgent into a multi-user trading service.
 
 Future work should remain evidence-driven and preserve reproducibility. It must not silently add LLM trading agents, reinforcement learning, sentiment analysis, brokerage integration, live/paper trading, authentication, or payments without an explicit versioned scope change.
 
@@ -208,7 +208,7 @@ npm run build
 
 See the [architecture](docs/ARCHITECTURE.md), [methodology](docs/RESEARCH_METHODOLOGY.md), [results](docs/RESULTS.md), [demo](docs/DEMO.md), [development notes](docs/DEVELOPMENT.md), [troubleshooting](docs/TROUBLESHOOTING.md), and [release checklist](docs/RELEASE_CHECKLIST.md) for local operation and release evidence.
 
-For public Render/Vercel deployment settings, including required CORS and persistent SQLite-disk configuration, read [deployment instructions](docs/DEPLOYMENT.md).
+For public Render/Vercel deployment settings, including required CORS and managed PostgreSQL configuration, read [deployment instructions](docs/DEPLOYMENT.md).
 
 ## Disclaimer
 

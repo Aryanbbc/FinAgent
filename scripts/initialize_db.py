@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize the local FinAgent V0.4 SQLite experiment database."""
+"""Initialize the selected FinAgent SQLite or PostgreSQL experiment database."""
 
 from __future__ import annotations
 
@@ -15,14 +15,12 @@ from finagent.database.db import Database  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Initialize the FinAgent SQLite database")
-    parser.add_argument("--database", default="data/finagent.db", help="Database path, relative to the project root")
+    parser = argparse.ArgumentParser(description="Initialize the FinAgent SQLite or PostgreSQL database")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     arguments = parser.parse_args()
-    path = Path(arguments.database)
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-    Database(path).initialize()
-    print(f"Initialized database: {path}")
+    database = Database(arguments.database, PROJECT_ROOT)
+    database.initialize()
+    print(f"Initialized {database.backend} database: {database.database_identifier}")
     return 0
 
 

@@ -23,6 +23,7 @@ from finagent.database.models import ExperimentRecord
 from finagent.learning.workflow import run_improvement
 from finagent.runner import load_configuration, run_experiment
 from finagent.validation.workflow import run_research_validation
+from finagent.validation.report import ResearchReportExporter
 from finagent.utils.logging import configure_logging, log_event
 
 
@@ -39,11 +40,16 @@ class ResearchService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.database = Database(settings.database_path)
+        self.database = Database(settings.database_url, settings.project_root)
         self.repository = ExperimentRepository(self.database)
         self.dataset_registry = DatasetRegistry(self.database)
         self.dataset_manager = DatasetManager(self.dataset_registry, settings.data_cache_path)
         self.logger = configure_logging()
+
+    def ensure_database_ready(self) -> None:
+        """Re-run idempotent schema setup at service startup before requests are accepted."""
+        self.database.initialize()
+        self.dataset_registry._initialize()
 
     @staticmethod
     def _dataset_summary(dataset: Any) -> dict[str, Any]:
@@ -234,10 +240,15 @@ class ResearchService:
     def report_path(self, experiment_id: str) -> Path:
         self._require_experiment(experiment_id)
         report = self.settings.reports_path / f"{experiment_id}_research_report.md"
-        if not report.is_file():
+        if not report.is_file() and self.database.backend == "sqlite":
             report = self.settings.project_root / "data" / "demo" / "reports" / f"{experiment_id}_research_report.md"
         if not report.is_file():
-            raise NotFoundError(f"Report not found for experiment: {experiment_id}")
+            # Reports are derived from persisted evidence, so an ephemeral web
+            # filesystem never makes a PostgreSQL-backed experiment unreadable.
+            try:
+                report = ResearchReportExporter(self.repository).export(experiment_id, report)
+            except ValueError as error:
+                raise NotFoundError(f"Report not found for experiment: {experiment_id}") from error
         return report
 
     def report(self, experiment_id: str) -> dict[str, str]:
@@ -259,7 +270,9 @@ class ResearchService:
         latest = self.repository.latest_experiment()
         return {
             "status": "ok" if database["status"] == "ok" else "degraded",
-            "database_status": str(database["status"]),
+            "database_status": str(database.get("database_status", database["status"])),
+            "database_backend": str(database["database_backend"]),
+            "database_connectivity": bool(database["database_connectivity"]),
             "dataset_registry_status": "ok" if database["status"] == "ok" else "unavailable",
             "latest_experiment_at": latest.created_at if latest else None,
             "latest_validation_at": self.repository.latest_validation_created_at(),
@@ -272,14 +285,16 @@ class ResearchService:
         except (OSError, subprocess.CalledProcessError):
             revision = None
         _, experiment_count = self.repository.list_experiments(limit=1)
-        path = self.settings.database_path
         datasets, dataset_count = self.dataset_registry.list_datasets(limit=1)
         latest_dataset = datasets[0] if datasets else None
         _, warnings = self.dataset_registry.list_datasets(limit=1, status="warning")
         health = self.database.health_check()
         demo = self.database.demo_seed("default")
         return {
-            "finagent_version": __version__, "database_path": str(path), "database_exists": path.exists(), "database_size_bytes": path.stat().st_size if path.exists() else 0,
+            "finagent_version": __version__, "database_path": str(health["path"]),
+            "database_exists": self.database.backend == "postgresql" or (self.database.path is not None and self.database.path.exists()),
+            "database_size_bytes": int(health["size_bytes"]), "database_backend": self.database.backend,
+            "database_connectivity": bool(health["database_connectivity"]),
             "git_revision": revision, "experiment_count": experiment_count, "configuration_version_count": self.repository.count_configuration_versions(),
             "latest_experiment_id": latest.experiment_id if latest else None, "dataset_count": dataset_count,
             "latest_dataset_refresh": latest_dataset.last_refreshed_at if latest_dataset else None, "data_providers": self.dataset_manager.providers.describe(),
@@ -299,7 +314,11 @@ class ResearchService:
 
     def data_dataset(self, dataset_id: str) -> dict[str, Any]:
         dataset = self.dataset_registry.latest(dataset_id)
-        sample = pd.read_csv(dataset.cache_path, nrows=50)
+        sample = (
+            self.dataset_registry.load_ohlcv(dataset.version_id).head(50)
+            if self.dataset_registry.has_ohlcv(dataset.version_id)
+            else pd.read_csv(dataset.cache_path, nrows=50)
+        )
         for column in sample.columns:
             sample[column] = sample[column].map(self._clean)
         payload = self._dataset_summary(dataset)
@@ -352,19 +371,27 @@ class ResearchService:
             raise InvalidConfigurationError("config_path must contain a YAML mapping")
         return str(path)
 
-    def run_experiment(self, config_path: str) -> dict[str, Any]:
+    def run_experiment(self, config_path: str, dataset_id: str | None = None) -> dict[str, Any]:
         path = self._config_path(config_path)
         configuration = load_configuration(path, self.settings.project_root)
         if not isinstance(configuration.get("experiment"), Mapping) or not isinstance(configuration.get("strategy"), Mapping):
             raise InvalidConfigurationError("experiment configuration requires experiment and strategy mappings")
         log_event(self.logger, "EXPERIMENT_RUN_STARTED", workflow="experiment")
-        experiment_id, result = run_experiment(path, self.settings.project_root, self.logger)
+        if dataset_id:
+            self.dataset_registry.latest(dataset_id)
+        experiment_id, result = run_experiment(
+            path,
+            self.settings.project_root,
+            self.logger,
+            database_url=self.settings.database_url,
+            configuration_overrides={"experiment": {"dataset_id": dataset_id}} if dataset_id else None,
+        )
         log_event(self.logger, "EXPERIMENT_RUN_COMPLETED", workflow="experiment", artifact_id=experiment_id)
-        return {"workflow": "experiment", "status": "completed", "experiment_id": experiment_id, "run_id": None, "validation_id": None, "metadata": {"trade_count": result["metrics"].get("number_of_trades"), "critic_enabled": result.get("critique", {}).get("enabled", False)}}
+        return {"workflow": "experiment", "status": "completed", "experiment_id": experiment_id, "run_id": None, "validation_id": None, "metadata": {"trade_count": result["metrics"].get("number_of_trades"), "critic_enabled": result.get("critique", {}).get("enabled", False), "dataset_id": dataset_id}}
 
     def run_improvement(self, config_path: str) -> dict[str, Any]:
         log_event(self.logger, "IMPROVEMENT_RUN_STARTED", workflow="improvement")
-        result = run_improvement(self._config_path(config_path), self.settings.project_root, self.logger)
+        result = run_improvement(self._config_path(config_path), self.settings.project_root, self.logger, database_url=self.settings.database_url)
         if result is None:
             return {"workflow": "improvement", "status": "disabled", "experiment_id": None, "run_id": None, "validation_id": None, "metadata": {"reason": "learning.enabled is false"}}
         latest = result.decisions[-1] if result.decisions else None
@@ -374,7 +401,7 @@ class ResearchService:
 
     def run_validation(self, config_path: str) -> dict[str, Any]:
         log_event(self.logger, "VALIDATION_RUN_STARTED", workflow="validation")
-        result = run_research_validation(self._config_path(config_path), self.settings.project_root, self.logger)
+        result = run_research_validation(self._config_path(config_path), self.settings.project_root, self.logger, database_url=self.settings.database_url)
         if result is None:
             return {"workflow": "validation", "status": "disabled", "experiment_id": None, "run_id": None, "validation_id": None, "metadata": {"reason": "validation.enabled is false"}}
         response = {"workflow": "validation", "status": "completed", "experiment_id": result.experiment_id, "run_id": None, "validation_id": result.validation_id, "metadata": {"asset_count": len(result.asset_results), "robustness_score": result.robustness.score}}

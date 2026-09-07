@@ -18,6 +18,6 @@ export function GlobalStatus() {
   const label = status.api === "loading" ? "Checking local API" : status.api === "ok" ? "API online" : status.api === "degraded" ? "API degraded" : "API unavailable";
   return <section className={`global-status ${status.api}`} aria-live="polite">
     <span className="status-dot" /> <strong>{label}</strong>
-    {status.system && <span>SQLite {status.system.database_status} · {status.system.dataset_count} datasets · latest run {dateTime(status.system.last_successful_run)}</span>}
+    {status.system && <span>{status.system.database_backend} {status.system.database_status} · {status.system.dataset_count} datasets · latest run {dateTime(status.system.last_successful_run)}</span>}
   </section>;
 }

@@ -36,7 +36,7 @@ def list_experiments(
 
 @router.post("/run", response_model=ExecutionResponse)
 def run(request: RunRequest, service: ResearchService = Depends(get_service)) -> dict[str, object]:
-    return service.run_experiment(request.config_path)
+    return service.run_experiment(request.config_path, request.dataset_id)
 
 
 @router.get("/{experiment_id}", response_model=ExperimentDetail)

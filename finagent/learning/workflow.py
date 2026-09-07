@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from finagent.data.loader import CSVDataLoader
+from finagent.data.registry import DatasetRegistry
 from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.learning.learning_agent import LearningAgent
@@ -30,6 +31,7 @@ def run_improvement(
     config_path: str | Path,
     project_root: str | Path,
     logger: logging.Logger | None = None,
+    database_url: str | Path | None = None,
 ) -> ImprovementRunResult | None:
     """Generate, validate, gate, and record bounded V0.5 candidates when explicitly enabled."""
     root = Path(project_root)
@@ -46,11 +48,11 @@ def run_improvement(
 
     source_value = improvement_config.get("source_experiment_config", "config/experiments.yaml")
     source_configuration = load_configuration(source_value, root)
-    database_value = improvement_config.get("database_path", source_configuration.get("database_path", "data/finagent.db"))
-    database_path = Path(database_value)
-    if not database_path.is_absolute():
-        database_path = root / database_path
-    repository = ExperimentRepository(Database(database_path))
+    database_value = database_url or improvement_config.get("database_path", source_configuration.get("database_path", "data/finagent.db"))
+    database = Database(database_value, root)
+    if database_url is not None:
+        source_configuration["database_path"] = str(database_url)
+    repository = ExperimentRepository(database)
     current_version = repository.current_configuration_version()
     if current_version is None:
         current_version = ConfigurationVersion(
@@ -97,11 +99,21 @@ def run_improvement(
             logger.info("event=NO_CANDIDATES_GENERATED parent_version=%s", current_version.version_id)
         return ImprovementRunResult(current_version, (), (), (), None)
 
-    dataset_value = current_version.configuration["experiment"]["dataset"]
-    dataset_path = Path(dataset_value)
-    if not dataset_path.is_absolute():
-        dataset_path = root / dataset_path
-    market_data = CSVDataLoader().load(dataset_path)
+    experiment_configuration = current_version.configuration["experiment"]
+    dataset_id = experiment_configuration.get("dataset_id")
+    if dataset_id:
+        dataset_registry = DatasetRegistry(database)
+        dataset = dataset_registry.latest(str(dataset_id))
+        market_data = (
+            dataset_registry.load_ohlcv(dataset.version_id)
+            if dataset_registry.has_ohlcv(dataset.version_id)
+            else CSVDataLoader().load(dataset.cache_path)
+        )
+    else:
+        dataset_path = Path(experiment_configuration["dataset"])
+        if not dataset_path.is_absolute():
+            dataset_path = root / dataset_path
+        market_data = CSVDataLoader().load(dataset_path)
     walk_forward = WalkForwardEvaluator(WalkForwardConfig.from_mapping(dict(learning.get("walk_forward", {}))))
     promotion_configuration = dict(learning.get("promotion_gate", {}))
     promotion_configuration.setdefault("minimum_windows", learning.get("walk_forward", {}).get("min_windows", 1))

@@ -34,9 +34,13 @@ class ExperimentRepository:
 
     def next_experiment_id(self) -> str:
         with self.database.connect() as connection:
-            row = connection.execute(
-                "SELECT COALESCE(MAX(CAST(SUBSTR(experiment_id, 5) AS INTEGER)), 0) AS last_number FROM experiments"
-            ).fetchone()
+            return self._next_experiment_id(connection)
+
+    @staticmethod
+    def _next_experiment_id(connection: Any) -> str:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(CAST(SUBSTR(experiment_id, 5) AS INTEGER)), 0) AS last_number FROM experiments"
+        ).fetchone()
         return format_experiment_id(int(row["last_number"]) + 1)
 
     def save_experiment(
@@ -57,9 +61,13 @@ class ExperimentRepository:
         agent_decisions: pd.DataFrame | None = None,
     ) -> str:
         """Atomically save a complete reproducible experiment and return its ID."""
-        experiment_id = self.next_experiment_id()
         created_at = datetime.now(UTC).isoformat()
         with self.database.connect() as connection:
+            if self.database.backend == "postgresql":
+                # IDs retain their established EXP-000001 format while the
+                # table lock prevents concurrent production writers colliding.
+                connection.execute("LOCK TABLE experiments IN EXCLUSIVE MODE")
+            experiment_id = self._next_experiment_id(connection)
             connection.execute(
                 """
                 INSERT INTO experiments (
@@ -239,9 +247,9 @@ class ExperimentRepository:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         sort_columns = {
             "created_at": "created_at",
-            "total_return": "json_extract(results_json, '$.metrics.total_return')",
-            "sharpe_ratio": "json_extract(results_json, '$.metrics.sharpe_ratio')",
-            "maximum_drawdown": "json_extract(results_json, '$.metrics.maximum_drawdown')",
+            "total_return": self.database.json_number("results_json", ("metrics", "total_return")),
+            "sharpe_ratio": self.database.json_number("results_json", ("metrics", "sharpe_ratio")),
+            "maximum_drawdown": self.database.json_number("results_json", ("metrics", "maximum_drawdown")),
             "start_date": "start_date",
         }
         order_column = sort_columns.get(sort_by, "created_at")
@@ -260,37 +268,31 @@ class ExperimentRepository:
         return self.get_experiment_memory(row["experiment_id"]) if row else None
 
     def get_trades(self, experiment_id: str) -> pd.DataFrame:
-        with self.database.connect() as connection:
-            return pd.read_sql_query(
-                "SELECT timestamp, side, price, quantity, transaction_cost, portfolio_value, realized_pnl, trade_return "
-                "FROM trades WHERE experiment_id = ? ORDER BY id",
-                connection,
-                params=(experiment_id,),
-            )
+        return self.database.fetch_dataframe(
+            "SELECT timestamp, side, price, quantity, transaction_cost, portfolio_value, realized_pnl, trade_return "
+            "FROM trades WHERE experiment_id = ? ORDER BY id",
+            (experiment_id,),
+        )
 
     def get_regime_observations(self, experiment_id: str) -> pd.DataFrame:
         """Return persisted causal regime observations in chronological order."""
-        with self.database.connect() as connection:
-            return pd.read_sql_query(
-                "SELECT timestamp, regime, confidence, rolling_return, rolling_volatility, "
-                "moving_average_slope, momentum, drawdown "
-                "FROM regime_observations WHERE experiment_id = ? ORDER BY id",
-                connection,
-                params=(experiment_id,),
-            )
+        return self.database.fetch_dataframe(
+            "SELECT timestamp, regime, confidence, rolling_return, rolling_volatility, "
+            "moving_average_slope, momentum, drawdown "
+            "FROM regime_observations WHERE experiment_id = ? ORDER BY id",
+            (experiment_id,),
+        )
 
     def get_agent_decisions(self, experiment_id: str) -> pd.DataFrame:
         """Return persisted V0.3 agent decision chains in chronological order."""
-        with self.database.connect() as connection:
-            decisions = pd.read_sql_query(
-                "SELECT timestamp, technical_trend, technical_momentum, technical_volatility, technical_rsi, "
-                "technical_signal_strength, technical_confidence, regime, regime_confidence, selected_strategy, "
-                "action, execution_action, proposal_confidence, requested_position_size, strategy_reason_codes_json, "
-                "risk_approved, adjusted_position_size, risk_reason_code "
-                "FROM agent_decisions WHERE experiment_id = ? ORDER BY id",
-                connection,
-                params=(experiment_id,),
-            )
+        decisions = self.database.fetch_dataframe(
+            "SELECT timestamp, technical_trend, technical_momentum, technical_volatility, technical_rsi, "
+            "technical_signal_strength, technical_confidence, regime, regime_confidence, selected_strategy, "
+            "action, execution_action, proposal_confidence, requested_position_size, strategy_reason_codes_json, "
+            "risk_approved, adjusted_position_size, risk_reason_code "
+            "FROM agent_decisions WHERE experiment_id = ? ORDER BY id",
+            (experiment_id,),
+        )
         if not decisions.empty:
             decisions["strategy_reason_codes"] = decisions.pop("strategy_reason_codes_json").map(json.loads)
             decisions["risk_approved"] = decisions["risk_approved"].astype(bool)
@@ -300,15 +302,14 @@ class ExperimentRepository:
         """Return a bounded page of decision history without loading all rows for API clients."""
         with self.database.connect() as connection:
             total = int(connection.execute("SELECT COUNT(*) AS count FROM agent_decisions WHERE experiment_id = ?", (experiment_id,)).fetchone()["count"])
-            decisions = pd.read_sql_query(
-                "SELECT timestamp, technical_trend, technical_momentum, technical_volatility, technical_rsi, "
-                "technical_signal_strength, technical_confidence, regime, regime_confidence, selected_strategy, "
-                "action, execution_action, proposal_confidence, requested_position_size, strategy_reason_codes_json, "
-                "risk_approved, adjusted_position_size, risk_reason_code FROM agent_decisions WHERE experiment_id = ? "
-                "ORDER BY id LIMIT ? OFFSET ?",
-                connection,
-                params=(experiment_id, limit, offset),
-            )
+        decisions = self.database.fetch_dataframe(
+            "SELECT timestamp, technical_trend, technical_momentum, technical_volatility, technical_rsi, "
+            "technical_signal_strength, technical_confidence, regime, regime_confidence, selected_strategy, "
+            "action, execution_action, proposal_confidence, requested_position_size, strategy_reason_codes_json, "
+            "risk_approved, adjusted_position_size, risk_reason_code FROM agent_decisions WHERE experiment_id = ? "
+            "ORDER BY id LIMIT ? OFFSET ?",
+            (experiment_id, limit, offset),
+        )
         if not decisions.empty:
             decisions["strategy_reason_codes"] = decisions.pop("strategy_reason_codes_json").map(json.loads)
             decisions["risk_approved"] = decisions["risk_approved"].astype(bool)
@@ -328,10 +329,17 @@ class ExperimentRepository:
         with self.database.connect() as connection:
             connection.execute(
                 """
-                INSERT OR REPLACE INTO critiques (
+                INSERT INTO critiques (
                     experiment_id, created_at, confidence, strengths_json, weaknesses_json, failure_modes_json,
                     regime_observations_json, recommendations_json, reason_codes_json, critique_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(experiment_id) DO UPDATE SET
+                    created_at = EXCLUDED.created_at, confidence = EXCLUDED.confidence,
+                    strengths_json = EXCLUDED.strengths_json, weaknesses_json = EXCLUDED.weaknesses_json,
+                    failure_modes_json = EXCLUDED.failure_modes_json,
+                    regime_observations_json = EXCLUDED.regime_observations_json,
+                    recommendations_json = EXCLUDED.recommendations_json,
+                    reason_codes_json = EXCLUDED.reason_codes_json, critique_json = EXCLUDED.critique_json
                 """,
                 (
                     critique.experiment_id,
@@ -363,11 +371,18 @@ class ExperimentRepository:
                 raise ValueError(f"Experiment does not exist: {record.experiment_id}")
             connection.execute(
                 """
-                INSERT OR REPLACE INTO experiment_memory (
+                INSERT INTO experiment_memory (
                     experiment_id, created_at, agent_version, strategy, strategy_parameters_json,
                     regime_distribution_json, metrics_json, maximum_drawdown, turnover, transaction_costs_json,
                     critique_json, decision_summary_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(experiment_id) DO UPDATE SET
+                    created_at = EXCLUDED.created_at, agent_version = EXCLUDED.agent_version,
+                    strategy = EXCLUDED.strategy, strategy_parameters_json = EXCLUDED.strategy_parameters_json,
+                    regime_distribution_json = EXCLUDED.regime_distribution_json, metrics_json = EXCLUDED.metrics_json,
+                    maximum_drawdown = EXCLUDED.maximum_drawdown, turnover = EXCLUDED.turnover,
+                    transaction_costs_json = EXCLUDED.transaction_costs_json, critique_json = EXCLUDED.critique_json,
+                    decision_summary_json = EXCLUDED.decision_summary_json
                 """,
                 (
                     record.experiment_id,
@@ -534,7 +549,7 @@ class ExperimentRepository:
         return [self._version_from_row(row) for row in rows]
 
     def save_candidate_configuration(self, candidate: CandidateProposal) -> None:
-        """Insert a generated candidate before it is evaluated; duplicate IDs are rejected by SQLite."""
+        """Insert a generated candidate before it is evaluated; duplicate IDs are rejected by the database."""
         with self.database.connect() as connection:
             connection.execute(
                 """
@@ -676,8 +691,10 @@ class ExperimentRepository:
         with self.database.connect() as connection:
             connection.execute(
                 """
-                INSERT OR REPLACE INTO experiment_manifests (experiment_id, created_at, manifest_json)
+                INSERT INTO experiment_manifests (experiment_id, created_at, manifest_json)
                 VALUES (?, ?, ?)
+                ON CONFLICT(experiment_id) DO UPDATE SET created_at = EXCLUDED.created_at,
+                    manifest_json = EXCLUDED.manifest_json
                 """,
                 (manifest.experiment_id, manifest.created_at, json.dumps(manifest.to_dict(), sort_keys=True, default=str)),
             )
@@ -824,9 +841,11 @@ class ExperimentRepository:
             clauses.append("EXISTS (SELECT 1 FROM research_validation_assets AS asset_filter WHERE asset_filter.validation_id = research_validations.validation_id AND asset_filter.asset = ?)")
             parameters.append(asset)
         if status == "passed":
-            clauses.append("json_extract(validation_json, '$.leakage.passed') = 1")
+            expected = "1" if self.database.backend == "sqlite" else "TRUE"
+            clauses.append(f"{self.database.json_boolean('validation_json', ('leakage', 'passed'))} = {expected}")
         elif status == "failed":
-            clauses.append("json_extract(validation_json, '$.leakage.passed') = 0")
+            expected = "0" if self.database.backend == "sqlite" else "FALSE"
+            clauses.append(f"{self.database.json_boolean('validation_json', ('leakage', 'passed'))} = {expected}")
         if start_date:
             clauses.append("created_at >= ?")
             parameters.append(start_date)

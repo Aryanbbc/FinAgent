@@ -1,33 +1,172 @@
-"""SQLite database initialization for local experiment storage."""
+"""Portable database initialization for local SQLite and production PostgreSQL."""
 
 from __future__ import annotations
 
-import sqlite3
-from pathlib import Path
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+import re
+import sqlite3
+from typing import Any, Literal
+from urllib.parse import urlsplit
+
+import pandas as pd
+
+
+DatabaseBackend = Literal["sqlite", "postgresql"]
+
+
+class DatabaseError(RuntimeError):
+    """Raised when a configured database cannot be opened or initialized."""
+
+
+class DatabaseConnection:
+    """Small DB-API adapter that keeps repository bind parameters portable."""
+
+    def __init__(self, database: "Database", raw_connection: Any) -> None:
+        self.database = database
+        self.raw_connection = raw_connection
+
+    def __enter__(self) -> "DatabaseConnection":
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
+        try:
+            if exc_type is None:
+                self.raw_connection.commit()
+            else:
+                self.raw_connection.rollback()
+        finally:
+            self.raw_connection.close()
+        return False
+
+    def execute(self, statement: str, parameters: Any = ()) -> Any:
+        return self.raw_connection.execute(self.database.prepare_sql(statement), parameters)
+
+    def executemany(self, statement: str, parameters: Any) -> Any:
+        if self.database.backend == "sqlite":
+            return self.raw_connection.executemany(self.database.prepare_sql(statement), parameters)
+        with self.raw_connection.cursor() as cursor:
+            return cursor.executemany(self.database.prepare_sql(statement), parameters)
+
+    def executescript(self, script: str) -> None:
+        if self.database.backend == "sqlite":
+            self.raw_connection.executescript(script)
+            return
+        for statement in script.split(";"):
+            if statement.strip():
+                self.raw_connection.execute(self.database.prepare_sql(statement))
 
 
 class Database:
-    """Creates and connects to the local V0.1–V0.6 SQLite schema."""
+    """Database abstraction preserving the repository contract across SQLite and PostgreSQL.
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+    A path (the historic API) remains a SQLite database.  URL inputs select the
+    backend explicitly: ``sqlite:///...``, ``postgresql://...``, or ``postgres://``.
+    """
 
-    def connect(self) -> sqlite3.Connection:
-        """Open a bounded local connection with foreign keys and lock waiting enabled."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        return connection
+    _SCHEMA_VERSION = "core-1"
+
+    def __init__(self, database_url: str | Path, project_root: str | Path | None = None) -> None:
+        value = str(database_url)
+        self._project_root = Path(project_root).resolve() if project_root else Path.cwd()
+        self.path: Path | None = None
+        if value.startswith("postgresql://") or value.startswith("postgres://"):
+            self.backend: DatabaseBackend = "postgresql"
+            self.url = "postgresql://" + value.split("://", 1)[1]
+        elif value.startswith("sqlite://"):
+            self.backend = "sqlite"
+            raw_path = value[len("sqlite:///") :] if value.startswith("sqlite:///") else value[len("sqlite://") :]
+            self.path = self._resolve_sqlite_path(raw_path)
+            self.url = "sqlite:///:memory:" if raw_path == ":memory:" else f"sqlite:///{self.path}"
+        elif "://" not in value:
+            self.backend = "sqlite"
+            self.path = self._resolve_sqlite_path(value)
+            self.url = "sqlite:///:memory:" if value == ":memory:" else f"sqlite:///{self.path}"
+        else:
+            raise ValueError("DATABASE_URL must use sqlite://, postgresql://, or postgres://")
+
+    def _resolve_sqlite_path(self, raw_path: str) -> Path:
+        if raw_path == ":memory:":
+            return Path(":memory:")
+        path = Path(raw_path)
+        return path if path.is_absolute() else (self._project_root / path).resolve()
+
+    @property
+    def database_identifier(self) -> str:
+        """Safe identifier suitable for health/system responses (no credentials)."""
+        if self.backend == "sqlite":
+            return str(self.path)
+        parsed = urlsplit(self.url)
+        return f"{parsed.hostname or 'postgres'}{f':{parsed.port}' if parsed.port else ''}{parsed.path or '/'}"
+
+    def prepare_sql(self, statement: str) -> str:
+        """Translate the repository's DB-API qmark parameters for psycopg."""
+        if self.backend == "sqlite":
+            return statement
+        portable = statement.replace("?", "%s")
+        return re.sub(
+            r"\bid\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+            "id BIGSERIAL PRIMARY KEY",
+            portable,
+            flags=re.IGNORECASE,
+        )
+
+    def json_text(self, column: str, path: tuple[str, ...]) -> str:
+        """Return a backend-specific expression for a JSON value kept in a text column."""
+        if self.backend == "sqlite":
+            return f"json_extract({column}, '$.{'.'.join(path)}')"
+        return f"({column}::jsonb #>> '{{{','.join(path)}}}')"
+
+    def json_number(self, column: str, path: tuple[str, ...]) -> str:
+        expression = self.json_text(column, path)
+        return expression if self.backend == "sqlite" else f"CAST({expression} AS DOUBLE PRECISION)"
+
+    def json_boolean(self, column: str, path: tuple[str, ...]) -> str:
+        expression = self.json_text(column, path)
+        return expression if self.backend == "sqlite" else f"CAST({expression} AS BOOLEAN)"
+
+    def connect(self) -> DatabaseConnection:
+        """Open a bounded connection with backend-specific safety settings."""
+        if self.backend == "sqlite":
+            assert self.path is not None
+            if self.path != Path(":memory:"):
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(self.path, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            return DatabaseConnection(self, connection)
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+
+            return DatabaseConnection(
+                self,
+                psycopg.connect(self.url, connect_timeout=5, row_factory=dict_row),
+            )
+        except ImportError as error:  # pragma: no cover - exercised in deployment packaging
+            raise DatabaseError("PostgreSQL support requires the 'psycopg' package") from error
+        except Exception as error:  # psycopg is intentionally an optional local dependency
+            raise DatabaseError(f"Unable to connect to PostgreSQL: {error}") from error
 
     def initialize(self) -> None:
-        """Create all local research tables and safe performance indexes idempotently."""
+        """Apply the in-app versioned schema migration before work is accepted."""
+        try:
+            self._initialize_schema()
+        except DatabaseError:
+            raise
+        except Exception as error:
+            raise DatabaseError(f"Unable to initialize {self.backend} schema: {error}") from error
+
+    def _initialize_schema(self) -> None:
+        """Run the idempotent schema migration using an already selected backend."""
         with self.connect() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = NORMAL")
+            if self.backend == "sqlite":
+                connection.execute("PRAGMA journal_mode = WAL")
+                connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+            )
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS experiments (
@@ -299,26 +438,58 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_validations_created ON research_validations(created_at DESC);
                 """
             )
+            connection.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?) "
+                "ON CONFLICT(version) DO NOTHING",
+                (self._SCHEMA_VERSION, datetime.now(UTC).isoformat()),
+            )
+
+    def fetch_dataframe(self, statement: str, parameters: Any = ()) -> pd.DataFrame:
+        """Read a query into a dataframe without exposing a backend connection to pandas."""
+        with self.connect() as connection:
+            cursor = connection.execute(statement, parameters)
+            rows = cursor.fetchall()
+            columns = [item[0] for item in cursor.description]
+        return pd.DataFrame([dict(row) for row in rows], columns=columns)
 
     def health_check(self) -> dict[str, Any]:
-        """Return non-destructive SQLite status and an integrity-check result."""
+        """Return non-destructive status, including the selected database backend."""
         try:
             self.initialize()
             with self.connect() as connection:
-                integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-                quick = connection.execute("PRAGMA quick_check").fetchone()[0]
+                if self.backend == "sqlite":
+                    integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+                    quick = connection.execute("PRAGMA quick_check").fetchone()[0]
+                else:
+                    connection.execute("SELECT 1").fetchone()
+                    integrity = "not_applicable"
+                    quick = "not_applicable"
             return {
-                "status": "ok" if integrity == "ok" and quick == "ok" else "degraded",
+                "status": "ok" if self.backend == "postgresql" or (integrity == "ok" and quick == "ok") else "degraded",
+                "database_status": "ok",
+                "database_backend": self.backend,
+                "database_connectivity": True,
                 "integrity_check": integrity,
                 "quick_check": quick,
-                "path": str(self.path),
-                "size_bytes": self.path.stat().st_size if self.path.exists() else 0,
+                "path": self.database_identifier,
+                "size_bytes": self.path.stat().st_size if self.backend == "sqlite" and self.path and self.path.exists() else 0,
             }
-        except sqlite3.Error as error:
-            return {"status": "unavailable", "message": str(error), "path": str(self.path), "size_bytes": 0}
+        except Exception as error:
+            return {
+                "status": "unavailable",
+                "database_status": "unavailable",
+                "database_backend": self.backend,
+                "database_connectivity": False,
+                "message": str(error),
+                "path": self.database_identifier,
+                "size_bytes": 0,
+            }
 
     def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
         """Create a consistent SQLite backup without deleting the source database."""
+        if self.backend != "sqlite":
+            raise ValueError("Database backups are only available for SQLite; use PostgreSQL-native backups in production")
+        assert self.path is not None
         target = Path(destination)
         if target.resolve() == self.path.resolve():
             raise ValueError("backup destination must differ from the source database")
@@ -326,7 +497,7 @@ class Database:
             raise FileExistsError(f"backup already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as source, sqlite3.connect(target) as backup:
-            source.backup(backup)
+            source.raw_connection.backup(backup)
         return target
 
     def save_demo_seed(self, seed_name: str, version: str, metadata_json: str) -> None:
@@ -334,11 +505,13 @@ class Database:
         self.initialize()
         with self.connect() as connection:
             connection.execute(
-                "INSERT OR REPLACE INTO demo_seed_records (seed_name, created_at, version, metadata_json) VALUES (?, ?, ?, ?)",
+                "INSERT INTO demo_seed_records (seed_name, created_at, version, metadata_json) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(seed_name) DO UPDATE SET created_at = EXCLUDED.created_at, "
+                "version = EXCLUDED.version, metadata_json = EXCLUDED.metadata_json",
                 (seed_name, datetime.now(UTC).isoformat(), version, metadata_json),
             )
 
-    def demo_seed(self, seed_name: str) -> sqlite3.Row | None:
+    def demo_seed(self, seed_name: str) -> Any | None:
         self.initialize()
         with self.connect() as connection:
             return connection.execute("SELECT * FROM demo_seed_records WHERE seed_name = ?", (seed_name,)).fetchone()

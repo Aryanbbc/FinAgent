@@ -19,16 +19,13 @@ from finagent.validation.release_export import ReleaseArtifactExporter  # noqa: 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export persisted FinAgent V1.0 release evidence without rerunning research")
     parser.add_argument("--experiment", required=True, help="Validated EXP-XXXXXX identifier")
-    parser.add_argument("--database", default="data/release/finagent_v1.db", help="SQLite database path")
+    parser.add_argument("--database", default="data/release/finagent_v1.db", help="SQLite path or PostgreSQL DATABASE_URL")
     parser.add_argument("--output", default="reports/v1.0", help="Directory for Markdown, CSV, SVG, and JSON artifacts")
     arguments = parser.parse_args()
-    database_path = Path(arguments.database)
-    if not database_path.is_absolute():
-        database_path = PROJECT_ROOT / database_path
     output_path = Path(arguments.output)
     if not output_path.is_absolute():
         output_path = PROJECT_ROOT / output_path
-    artifacts = ReleaseArtifactExporter(ExperimentRepository(Database(database_path))).export(arguments.experiment, output_path)
+    artifacts = ReleaseArtifactExporter(ExperimentRepository(Database(arguments.database, PROJECT_ROOT))).export(arguments.experiment, output_path)
     print(f"Release artifacts exported for {arguments.experiment}:")
     for name, path in artifacts.items():
         print(f"- {name}: {path}")

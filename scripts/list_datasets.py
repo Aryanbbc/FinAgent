@@ -17,11 +17,9 @@ from finagent.database.db import Database  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="List FinAgent V0.8 registered historical datasets")
-    parser.add_argument("--database", default="data/finagent.db")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     arguments = parser.parse_args()
-    database = Path(arguments.database)
-    if not database.is_absolute(): database = PROJECT_ROOT / database
-    datasets, total = DatasetRegistry(Database(database)).list_datasets(limit=100)
+    datasets, total = DatasetRegistry(Database(arguments.database, PROJECT_ROOT)).list_datasets(limit=100)
     print(f"Registered datasets: {total}")
     for item in datasets:
         print(f"{item.dataset_id} {item.version_id} {item.provider} {item.symbol} {item.interval} {item.start_date}..{item.end_date} rows={item.row_count} quality={item.validation.quality.score:.3f}")

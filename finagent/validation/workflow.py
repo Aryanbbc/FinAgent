@@ -45,6 +45,7 @@ def run_research_validation(
     config_path: str | Path,
     project_root: str | Path,
     logger: logging.Logger | None = None,
+    database_url: str | Path | None = None,
 ) -> ResearchValidationResult | None:
     """Run one user-requested V0.6 validation suite and persist it against a baseline experiment."""
     root = Path(project_root)
@@ -61,15 +62,15 @@ def run_research_validation(
 
     source = validation_file.get("source_experiment_config", "config/experiments.yaml")
     source_configuration = load_configuration(source, root)
+    if database_url is not None:
+        source_configuration["database_path"] = str(database_url)
+    database = Database(source_configuration.get("database_path", "data/finagent.db"), root)
+    registry = DatasetRegistry(database)
     # The standard experiment is retained unchanged and becomes the report/export anchor.
-    experiment_id, _ = run_experiment(source, root, logger)
-    database_value = source_configuration.get("database_path", "data/finagent.db")
-    database_path = Path(database_value)
-    if not database_path.is_absolute():
-        database_path = root / database_path
-    repository = ExperimentRepository(Database(database_path))
+    experiment_id, _ = run_experiment(source, root, logger, database_url=database_url)
+    repository = ExperimentRepository(database)
 
-    asset_specs = _asset_specs(validation_configuration, source_configuration, root)
+    asset_specs = _asset_specs(validation_configuration, source_configuration, registry)
     simulations = []
     asset_results = []
     windows = []
@@ -77,10 +78,7 @@ def run_research_validation(
     walk_forward_raw = dict(validation_configuration.get("walk_forward", {}))
     walk_forward = WalkForwardConfig.from_mapping(walk_forward_raw)
     for spec in asset_specs:
-        dataset_path = Path(spec.dataset)
-        if not dataset_path.is_absolute():
-            dataset_path = root / dataset_path
-        market_data = CSVDataLoader().load(dataset_path)
+        market_data = _load_asset_data(spec.dataset, root, registry)
         asset_configuration = configuration_for_asset(source_configuration, spec.asset, spec.dataset)
         simulation = simulate_configuration(market_data, asset_configuration, spec.asset)
         simulations.append(simulation)
@@ -230,43 +228,43 @@ def run_research_validation(
 
 
 def _asset_specs(
-    validation_configuration: dict[str, Any], source_configuration: dict[str, Any], root: Path
+    validation_configuration: dict[str, Any], source_configuration: dict[str, Any], registry: DatasetRegistry
 ) -> tuple[AssetSpec, ...]:
     collection_id = validation_configuration.get("dataset_collection_id")
     if collection_id:
-        database_value = source_configuration.get("database_path", "data/finagent.db")
-        database_path = Path(database_value)
-        if not database_path.is_absolute():
-            database_path = root / database_path
-        registry = DatasetRegistry(Database(database_path))
         records = registry.get_collection(str(collection_id)).members
         return tuple(
-            AssetSpec(str(member["symbol"]), registry.get_version(str(member["version_id"])).cache_path)
+            AssetSpec(str(member["symbol"]), f"registry://{member['version_id']}")
             for member in records
         )
     raw_assets = validation_configuration.get("assets", [])
     if not raw_assets:
         experiment = source_configuration["experiment"]
         if experiment.get("dataset_id"):
-            database_value = source_configuration.get("database_path", "data/finagent.db")
-            database_path = Path(database_value)
-            if not database_path.is_absolute():
-                database_path = root / database_path
-            dataset = DatasetRegistry(Database(database_path)).latest(str(experiment["dataset_id"]))
-            return (AssetSpec(str(experiment.get("asset") or dataset.symbol), dataset.cache_path),)
+            dataset = registry.latest(str(experiment["dataset_id"]))
+            return (AssetSpec(str(experiment.get("asset") or dataset.symbol), f"registry://{dataset.version_id}"),)
         return (AssetSpec(str(experiment["asset"]), str(experiment["dataset"])),)
     resolved_assets = []
     for item in raw_assets:
         if item.get("dataset_id"):
-            database_value = source_configuration.get("database_path", "data/finagent.db")
-            database_path = Path(database_value)
-            if not database_path.is_absolute():
-                database_path = root / database_path
-            dataset = DatasetRegistry(Database(database_path)).latest(str(item["dataset_id"]))
-            resolved_assets.append(AssetSpec(str(item.get("asset") or dataset.symbol), dataset.cache_path))
+            dataset = registry.latest(str(item["dataset_id"]))
+            resolved_assets.append(AssetSpec(str(item.get("asset") or dataset.symbol), f"registry://{dataset.version_id}"))
         else:
             resolved_assets.append(AssetSpec(str(item["asset"]), str(item["dataset"])))
     return tuple(resolved_assets)
+
+
+def _load_asset_data(dataset: str, root: Path, registry: DatasetRegistry) -> pd.DataFrame:
+    """Read a registry version from durable storage or preserve the legacy CSV path flow."""
+    if dataset.startswith("registry://"):
+        version_id = dataset.removeprefix("registry://")
+        if registry.has_ohlcv(version_id):
+            return registry.load_ohlcv(version_id)
+        return CSVDataLoader().load(registry.get_version(version_id).cache_path)
+    dataset_path = Path(dataset)
+    if not dataset_path.is_absolute():
+        dataset_path = root / dataset_path
+    return CSVDataLoader().load(dataset_path)
 
 
 def _pooled_equity_curve(simulations: list[Any]) -> pd.DataFrame:

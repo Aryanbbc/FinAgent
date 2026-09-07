@@ -20,11 +20,9 @@ def main() -> int:
     parser.add_argument("--name", required=True)
     parser.add_argument("--datasets", nargs="+", required=True)
     parser.add_argument("--description")
-    parser.add_argument("--database", default="data/finagent.db")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     arguments = parser.parse_args()
-    database = Path(arguments.database)
-    if not database.is_absolute(): database = PROJECT_ROOT / database
-    collection = DatasetRegistry(Database(database)).create_collection(arguments.name, arguments.datasets, arguments.description)
+    collection = DatasetRegistry(Database(arguments.database, PROJECT_ROOT)).create_collection(arguments.name, arguments.datasets, arguments.description)
     print(f"Collection: {collection.collection_id} ({collection.name})")
     for member in collection.members: print(f"- {member['symbol']}: {member['dataset_id']} @ {member['version_id']}")
     return 0

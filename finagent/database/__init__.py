@@ -1,6 +1,6 @@
-"""SQLite persistence for reproducible V0.1–V0.4 experiment records."""
+"""Portable SQLite/PostgreSQL persistence for reproducible research records."""
 
-from finagent.database.db import Database
+from finagent.database.db import Database, DatabaseError
 from finagent.database.experiment_repository import ExperimentRepository
 
-__all__ = ["Database", "ExperimentRepository"]
+__all__ = ["Database", "DatabaseError", "ExperimentRepository"]

@@ -27,14 +27,12 @@ def main() -> int:
     parser.add_argument("--source-path", help="Local CSV path when --provider local_csv")
     parser.add_argument("--force-refresh", action="store_true")
     parser.add_argument("--missing-data-policy", default="reject", choices=[item.value for item in MissingDataPolicy])
-    parser.add_argument("--database", default="data/finagent.db")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     parser.add_argument("--cache", default="data/cache")
     arguments = parser.parse_args()
-    database = Path(arguments.database)
     cache = Path(arguments.cache)
-    if not database.is_absolute(): database = PROJECT_ROOT / database
     if not cache.is_absolute(): cache = PROJECT_ROOT / cache
-    manager = DatasetManager(DatasetRegistry(Database(database)), cache)
+    manager = DatasetManager(DatasetRegistry(Database(arguments.database, PROJECT_ROOT)), cache)
     result = manager.fetch(
         arguments.provider,
         MarketDataRequest(arguments.symbol, arguments.start, arguments.end, arguments.interval, arguments.force_refresh, arguments.source_path),

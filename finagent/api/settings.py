@@ -66,10 +66,25 @@ class Settings:
             raise ValueError("Wildcard CORS origins are not permitted")
         if self.environment == "production" and not any(origin not in _LOCAL_CORS_ORIGINS for origin in self.cors_origins):
             raise ValueError("A deployed FRONTEND_ORIGIN is required in production")
+        normalized_url = self.database_url.lower()
+        if not (
+            normalized_url.startswith("sqlite://")
+            or normalized_url.startswith("postgresql://")
+            or normalized_url.startswith("postgres://")
+            or "://" not in self.database_url
+        ):
+            raise ValueError("DATABASE_URL must use sqlite://, postgresql://, or postgres://")
+
+    @property
+    def database_backend(self) -> str:
+        value = self.database_url.lower()
+        return "postgresql" if value.startswith(("postgresql://", "postgres://")) else "sqlite"
 
     @property
     def database_path(self) -> Path:
-        """Resolve a SQLite URL or local path; remote database drivers are intentionally unsupported."""
+        """Resolve a local SQLite path; PostgreSQL does not expose a filesystem path."""
+        if self.database_backend != "sqlite":
+            raise ValueError("database_path is only available when DATABASE_URL selects SQLite")
         prefix = "sqlite:///"
         value = self.database_url
         if value.startswith(prefix):

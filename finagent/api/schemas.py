@@ -16,6 +16,8 @@ class HealthResponse(APIModel):
     service: str
     version: str
     database_status: str = "ok"
+    database_backend: Literal["sqlite", "postgresql"] = "sqlite"
+    database_connectivity: bool = True
     dataset_registry_status: str = "ok"
     latest_experiment_at: str | None = None
     latest_validation_at: str | None = None
@@ -217,6 +219,8 @@ class SystemResponse(APIModel):
     data_providers: list[dict[str, Any]] = Field(default_factory=list)
     data_quality_warnings: int = 0
     database_status: str = "unknown"
+    database_backend: Literal["sqlite", "postgresql"] = "sqlite"
+    database_connectivity: bool = False
     database_integrity: str | None = None
     latest_experiment_at: str | None = None
     latest_validation_at: str | None = None
@@ -308,6 +312,7 @@ class RunRequest(APIModel):
         max_length=160,
         pattern=r"^config/[A-Za-z0-9_./-]+\.ya?ml$",
     )
+    dataset_id: str | None = Field(default=None, min_length=6, max_length=120, pattern=r"^DATA-[A-Z0-9-]+$")
 
 
 class ExecutionResponse(APIModel):

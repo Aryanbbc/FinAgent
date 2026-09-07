@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safe, non-destructive SQLite health, backup, and summary-export utility."""
+"""Safe health and summary export utility; backup remains intentionally SQLite-only."""
 
 from __future__ import annotations
 
@@ -16,23 +16,25 @@ from finagent.database.db import Database  # noqa: E402
 from finagent.database.experiment_repository import ExperimentRepository  # noqa: E402
 
 
-def _database_path(value: str) -> Path:
+def _database_value(value: str) -> str | Path:
+    if value.startswith(("sqlite://", "postgresql://", "postgres://")):
+        return value
     path = Path(value)
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Safely inspect or back up FinAgent SQLite data")
-    parser.add_argument("--database", default="data/finagent.db")
+    parser = argparse.ArgumentParser(description="Safely inspect FinAgent data or back up a SQLite database")
+    parser.add_argument("--database", default="data/finagent.db", help="SQLite path or PostgreSQL DATABASE_URL")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    subcommands.add_parser("health", help="Run SQLite integrity and quick checks")
-    backup = subcommands.add_parser("backup", help="Create a consistent copy; refuses to overwrite by default")
+    subcommands.add_parser("health", help="Run database connectivity/integrity checks")
+    backup = subcommands.add_parser("backup", help="Create a SQLite copy; refuses to overwrite by default")
     backup.add_argument("--output", required=True)
     backup.add_argument("--overwrite", action="store_true", help="Explicitly permit replacing the requested backup file")
     export = subcommands.add_parser("export", help="Write a JSON summary of local experiment records")
     export.add_argument("--output", required=True)
     args = parser.parse_args()
-    database = Database(_database_path(args.database))
+    database = Database(_database_value(args.database), PROJECT_ROOT)
     if args.command == "health":
         print(json.dumps(database.health_check(), indent=2, sort_keys=True))
         return 0
