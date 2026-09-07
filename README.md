@@ -136,7 +136,7 @@ Errors use a stable envelope:
 
 ## Live market intelligence (opt-in, no execution)
 
-V1.1 adds a separate `/live` workspace and typed `/api/live/*` routes. It polls Twelve Data for recent 1-, 5-, or 15-minute OHLCV bars because WebSocket access depends on a provider plan. The server emits a deterministic research signal only after an interval bar is complete; it does not submit or simulate an order.
+V1.1 adds a separate `/live` workspace and typed `/api/live/*` routes. It polls Twelve Data for recent 1-, 5-, or 15-minute OHLCV bars because WebSocket access depends on a provider plan. The server emits a deterministic research signal only after an interval bar is complete; it does not submit or simulate an order. For U.S. equities such as AAPL, the XNYS exchange calendar distinguishes pre-market, regular trading, after-hours, weekends, holidays, early closes, and daylight-saving changes. Provider health and market state are reported separately, so a healthy last bar after the session is `MARKET_CLOSED`, not `DELAYED`.
 
 Keep the key on the backend, then opt in deliberately:
 

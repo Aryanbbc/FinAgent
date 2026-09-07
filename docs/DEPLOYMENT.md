@@ -145,7 +145,7 @@ V1.1 live monitoring is separate from historical ingestion and experiments. It m
 
 1. Confirm `TWELVE_DATA_API_KEY` is present only in the Render backend Environment page. Never put it in Vercel, a `NEXT_PUBLIC_*` variable, an API request, or a repository file.
 2. Set `LIVE_MARKET_ENABLED=true`, `LIVE_DEFAULT_SYMBOL=AAPL`, `LIVE_SYMBOLS=AAPL`, `LIVE_INTERVAL=1min`, and `LIVE_POLL_SECONDS=60`, then redeploy.
-3. Open `https://<render-service>.onrender.com/api/live/status`. It should show `enabled: true`, feed mode `polling`, and one configured symbol. Before a valid provider response it may report `CONNECTING` or `OFFLINE`; this is an honest state, not synthetic data.
+3. Open `https://<render-service>.onrender.com/api/live/status`. It should show `enabled: true`, feed mode `polling`, and one configured symbol. Each symbol reports `provider_health`, `market_state`, `status`, `last_market_bar_timestamp`, and `last_successful_provider_poll`. For AAPL, the XNYS calendar prevents a normal weekend, holiday, pre-market, or after-hours gap from being labelled `DELAYED`; delayed means a stale bar while the regular market is open. Before a valid provider response it may report `CONNECTING` or `OFFLINE`; this is an honest state, not synthetic data.
 4. Run this from a Render shell or backend environment that has the same secret:
 
    ```bash

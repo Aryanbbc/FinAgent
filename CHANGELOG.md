@@ -8,6 +8,7 @@ All notable changes to FinAgent are documented here.
 - Added a rolling live OHLCV buffer that reuses the causal feature pipeline, regime detector, and deterministic Technical → Regime → Strategy → Risk chain.
 - Added separate bounded persistence for live research signals, regime observations, and feed events; historical experiments and trades remain unchanged.
 - Added typed `/api/live/*` routes, a monitoring-only `/live` terminal, and a credential-safe live smoke command.
+- Added XNYS-calendar-aware U.S. equity market states that keep provider health separate from pre-market, regular, after-hours, closed, and delayed feed status.
 - Preserved the V1.0 historical release suite and prohibited order creation, paper trading, brokerage connectivity, LLMs, reinforcement learning, and sentiment analysis.
 
 ## 1.0.0 — Final Research Release

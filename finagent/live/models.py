@@ -8,13 +8,29 @@ from enum import Enum
 from math import isfinite
 
 from finagent.agents.models import AgentDecision
+from finagent.live.market_session import LiveMarketState
 from finagent.regime.models import RegimeObservation
 
 
 class LiveFeedStatus(str, Enum):
+    """Presentation-safe combined feed state for the live terminal."""
+
     CONNECTING = "CONNECTING"
+    PRE_MARKET = "PRE_MARKET"
     LIVE = "LIVE"
+    AFTER_HOURS = "AFTER_HOURS"
+    MARKET_CLOSED = "MARKET_CLOSED"
     DELAYED = "DELAYED"
+    RECONNECTING = "RECONNECTING"
+    RATE_LIMITED = "RATE_LIMITED"
+    OFFLINE = "OFFLINE"
+
+
+class LiveProviderHealth(str, Enum):
+    """Provider transport/authentication health independent of market hours."""
+
+    CONNECTING = "CONNECTING"
+    OK = "OK"
     RECONNECTING = "RECONNECTING"
     RATE_LIMITED = "RATE_LIMITED"
     OFFLINE = "OFFLINE"
@@ -67,16 +83,25 @@ class LiveMarketBar:
 
 @dataclass(frozen=True)
 class LiveFeedState:
-    """Current bounded feed state, deliberately free of credentials."""
+    """Current bounded feed state, deliberately free of credentials.
+
+    ``provider_health`` and ``market_state`` are intentionally separate: an
+    old regular-session bar during a holiday can be healthy provider evidence
+    with a ``MARKET_CLOSED`` state, rather than a misleading delay.
+    """
 
     symbol: str
     enabled: bool
     status: LiveFeedStatus
+    provider_health: LiveProviderHealth
+    market_state: LiveMarketState
     provider: str
     feed_mode: str
     interval: str
     last_updated: datetime | None = None
     last_successful_update: datetime | None = None
+    last_market_bar_timestamp: datetime | None = None
+    last_successful_provider_poll: datetime | None = None
     message: str | None = None
     bars_buffered: int = 0
 
@@ -85,11 +110,15 @@ class LiveFeedState:
             "symbol": self.symbol,
             "enabled": self.enabled,
             "status": self.status.value,
+            "provider_health": self.provider_health.value,
+            "market_state": self.market_state.value,
             "provider": self.provider,
             "feed_mode": self.feed_mode,
             "interval": self.interval,
             "last_updated": self.last_updated.astimezone(UTC).isoformat() if self.last_updated else None,
             "last_successful_update": self.last_successful_update.astimezone(UTC).isoformat() if self.last_successful_update else None,
+            "last_market_bar_timestamp": self.last_market_bar_timestamp.astimezone(UTC).isoformat() if self.last_market_bar_timestamp else None,
+            "last_successful_provider_poll": self.last_successful_provider_poll.astimezone(UTC).isoformat() if self.last_successful_provider_poll else None,
             "message": self.message,
             "bars_buffered": self.bars_buffered,
         }

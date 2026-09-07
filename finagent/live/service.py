@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Callable
 
@@ -19,7 +20,8 @@ from finagent.agents.technical_agent import TechnicalAgent
 from finagent.data.market_provider import MarketDataProviderError
 from finagent.features.pipeline import FeaturePipeline
 from finagent.live.buffer import RollingOHLCVBuffer
-from finagent.live.models import LiveFeedState, LiveFeedStatus, LiveMarketBar, LiveSignal, LiveSignalAction
+from finagent.live.market_session import LiveMarketState, USEquityMarketCalendar
+from finagent.live.models import LiveFeedState, LiveFeedStatus, LiveMarketBar, LiveProviderHealth, LiveSignal, LiveSignalAction
 from finagent.live.provider import LiveMarketProvider, TwelveDataLiveProvider
 from finagent.live.repository import LiveMarketRepository
 from finagent.regime.detector import RuleBasedRegimeDetector
@@ -54,28 +56,26 @@ class LiveMarketService:
         provider: LiveMarketProvider | None = None,
         logger: logging.Logger | None = None,
         clock: Callable[[], datetime] | None = None,
+        market_calendar: USEquityMarketCalendar | None = None,
     ) -> None:
         self.settings = settings
         self.repository = repository
         self.provider = provider or TwelveDataLiveProvider()
         self.logger = logger or logging.getLogger("finagent.live")
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._market_calendar = market_calendar or USEquityMarketCalendar()
         self._buffers = {
             symbol: RollingOHLCVBuffer(self.settings.live_buffer_size)
             for symbol in self.settings.live_symbols
         }
-        self._states = {
-            symbol: LiveFeedState(
-                symbol=symbol,
-                enabled=self.settings.live_market_enabled,
-                status=self._initial_status(),
-                provider=self.provider.provider_name,
-                feed_mode="polling",
-                interval=self.settings.live_interval,
+        self._states: dict[str, LiveFeedState] = {}
+        initial_health = self._initial_provider_health()
+        for symbol in self.settings.live_symbols:
+            self._states[symbol] = self._new_state(
+                symbol,
+                provider_health=initial_health,
                 message=self._initial_message(),
             )
-            for symbol in self.settings.live_symbols
-        }
         self._latest_signals: dict[str, LiveSignal] = {}
         self._latest_regimes: dict[str, object] = {}
         self._last_regime: dict[str, str] = {}
@@ -105,10 +105,10 @@ class LiveMarketService:
             logger=self.logger,
         )
 
-    def _initial_status(self) -> LiveFeedStatus:
+    def _initial_provider_health(self) -> LiveProviderHealth:
         if not self.settings.live_market_enabled:
-            return LiveFeedStatus.OFFLINE
-        return LiveFeedStatus.CONNECTING if self.provider.is_available() else LiveFeedStatus.OFFLINE
+            return LiveProviderHealth.OFFLINE
+        return LiveProviderHealth.CONNECTING if self.provider.is_available() else LiveProviderHealth.OFFLINE
 
     def _initial_message(self) -> str:
         if not self.settings.live_market_enabled:
@@ -123,7 +123,7 @@ class LiveMarketService:
             return
         if not self.provider.is_available():
             for symbol in self.settings.live_symbols:
-                self._set_state(symbol, LiveFeedStatus.OFFLINE, "Twelve Data is not configured on this backend.")
+                self._set_state(symbol, LiveProviderHealth.OFFLINE, "Twelve Data is not configured on this backend.")
             return
         self._stop_event.clear()
         self._task = asyncio.create_task(self._poll_forever(), name="finagent-live-market-polling")
@@ -158,7 +158,7 @@ class LiveMarketService:
             "feed_mode": "polling",
             "poll_seconds": self.settings.live_poll_seconds,
             "interval": self.settings.live_interval,
-            "symbols": [self._states[symbol].to_dict() for symbol in self.settings.live_symbols],
+            "symbols": [self._visible_state(symbol).to_dict() for symbol in self.settings.live_symbols],
             "execution": "disabled",
         }
 
@@ -184,8 +184,12 @@ class LiveMarketService:
         # request is made per configured cadence.
         if state.last_updated is not None and now - state.last_updated < timedelta(seconds=self.settings.live_poll_seconds):
             return self.snapshot(symbol, refresh=False)
-        was_status = state.status
-        self._set_state(symbol, LiveFeedStatus.CONNECTING if state.last_successful_update is None else LiveFeedStatus.RECONNECTING, None)
+        was_provider_health = state.provider_health
+        self._set_state(
+            symbol,
+            LiveProviderHealth.CONNECTING if state.last_successful_provider_poll is None else LiveProviderHealth.RECONNECTING,
+            None,
+        )
         try:
             bars = self.provider.fetch_recent_bars(symbol, self.settings.live_interval, self.settings.live_buffer_size)
         except MarketDataProviderError as error:
@@ -211,11 +215,14 @@ class LiveMarketService:
         self._retry_count[symbol] = 0
         self._next_attempt[symbol] = None
         self._suspended[symbol] = False
-        event = "LIVE_FEED_CONNECTED" if was_status in {LiveFeedStatus.CONNECTING, LiveFeedStatus.OFFLINE} else "LIVE_RECONNECTED" if was_status in {LiveFeedStatus.RECONNECTING, LiveFeedStatus.RATE_LIMITED, LiveFeedStatus.DELAYED} else None
-        delayed = now - latest.timestamp > timedelta(seconds=self._interval_seconds() * 2)
-        feed_status = LiveFeedStatus.DELAYED if delayed else LiveFeedStatus.LIVE
-        message = "Latest received bar is delayed relative to the configured interval." if delayed else None
-        self._set_state(symbol, feed_status, message, last_successful=now)
+        event = "LIVE_FEED_CONNECTED" if was_provider_health in {LiveProviderHealth.CONNECTING, LiveProviderHealth.OFFLINE} else "LIVE_RECONNECTED" if was_provider_health in {LiveProviderHealth.RECONNECTING, LiveProviderHealth.RATE_LIMITED} else None
+        self._set_state(
+            symbol,
+            LiveProviderHealth.OK,
+            None,
+            last_successful_provider_poll=now,
+            last_market_bar_timestamp=latest.timestamp,
+        )
         if event:
             self._record_event(symbol, event, "Live market polling feed is available.", {"bars_buffered": len(self._buffers[symbol])})
         completed = self._latest_completed_bar(symbol, now)
@@ -242,7 +249,7 @@ class LiveMarketService:
             current_signal = signal.to_dict()
         regime = self._latest_regimes.get(symbol)
         return {
-            **self._states[symbol].to_dict(),
+            **self._visible_state(symbol).to_dict(),
             "latest": bars[-1].to_dict() if bars else None,
             "current_regime": regime.to_dict() if regime is not None else (current_signal or {}).get("regime"),
             "latest_signal": current_signal,
@@ -324,42 +331,110 @@ class LiveMarketService:
             self._next_attempt[symbol] = None
             delay = None
         if error.code == "RATE_LIMIT":
-            status = LiveFeedStatus.RATE_LIMITED
+            provider_health = LiveProviderHealth.RATE_LIMITED
             event = "LIVE_RATE_LIMITED"
         elif error.code == "PROVIDER_NOT_CONFIGURED" or not error.retryable:
-            status = LiveFeedStatus.OFFLINE
+            provider_health = LiveProviderHealth.OFFLINE
             event = "LIVE_FEED_DISCONNECTED"
         else:
-            status = LiveFeedStatus.RECONNECTING
+            provider_health = LiveProviderHealth.RECONNECTING
             event = "LIVE_FEED_DISCONNECTED"
-        self._set_state(symbol, status, error.reason)
+        self._set_state(symbol, provider_health, error.reason)
         self._record_event(symbol, event, "Live provider update was unavailable; bounded retry scheduled when applicable.", {"reason": error.reason, "retryable": error.retryable, "retry_after_seconds": delay})
 
     def _set_state(
         self,
         symbol: str,
-        status: LiveFeedStatus,
+        provider_health: LiveProviderHealth,
         message: str | None,
         *,
-        last_successful: datetime | None = None,
+        last_successful_provider_poll: datetime | None = None,
+        last_market_bar_timestamp: datetime | None = None,
     ) -> None:
-        previous = self._states[symbol]
+        self._states[symbol] = self._new_state(
+            symbol,
+            provider_health=provider_health,
+            message=message,
+            last_successful_provider_poll=last_successful_provider_poll,
+            last_market_bar_timestamp=last_market_bar_timestamp,
+            state_updated=True,
+        )
+
+    def _new_state(
+        self,
+        symbol: str,
+        *,
+        provider_health: LiveProviderHealth,
+        message: str | None,
+        last_successful_provider_poll: datetime | None = None,
+        last_market_bar_timestamp: datetime | None = None,
+        state_updated: bool = False,
+    ) -> LiveFeedState:
+        previous = self._states.get(symbol)
         now = self._clock()
-        self._states[symbol] = LiveFeedState(
+        last_poll = last_successful_provider_poll or (previous.last_successful_provider_poll if previous else None)
+        last_bar = last_market_bar_timestamp or (previous.last_market_bar_timestamp if previous else None)
+        market_state = self._market_calendar.state_at(now)
+        return LiveFeedState(
             symbol=symbol,
             enabled=self.settings.live_market_enabled,
-            status=status,
+            status=self._feed_status(provider_health, market_state, last_bar, now),
+            provider_health=provider_health,
+            market_state=market_state,
             provider=self.provider.provider_name,
             feed_mode="polling",
             interval=self.settings.live_interval,
-            last_updated=now,
-            last_successful_update=last_successful or previous.last_successful_update,
+            last_updated=now if state_updated else (previous.last_updated if previous else None),
+            # Retained for typed V1.1 client compatibility; it is a provider
+            # poll timestamp, not a market-bar timestamp.
+            last_successful_update=last_poll,
+            last_market_bar_timestamp=last_bar,
+            last_successful_provider_poll=last_poll,
             message=message,
             bars_buffered=len(self._buffers[symbol]),
         )
 
-    def _record_event(self, symbol: str, event_type: str, summary: str, metadata: dict[str, object]) -> None:
+    def _visible_state(self, symbol: str) -> LiveFeedState:
+        """Resolve the current market state without issuing a provider request."""
         state = self._states[symbol]
+        now = self._clock()
+        market_state = self._market_calendar.state_at(now)
+        feed_status = self._feed_status(state.provider_health, market_state, state.last_market_bar_timestamp, now)
+        message = state.message
+        if state.provider_health is LiveProviderHealth.OK:
+            if feed_status is LiveFeedStatus.DELAYED:
+                message = "No fresh market bar was received during the regular U.S. equity session."
+            elif market_state is not LiveMarketState.LIVE:
+                message = None
+        return replace(state, status=feed_status, market_state=market_state, message=message)
+
+    def _feed_status(
+        self,
+        provider_health: LiveProviderHealth,
+        market_state: LiveMarketState,
+        last_market_bar_timestamp: datetime | None,
+        now: datetime,
+    ) -> LiveFeedStatus:
+        if provider_health is LiveProviderHealth.CONNECTING:
+            return LiveFeedStatus.CONNECTING
+        if provider_health is LiveProviderHealth.RECONNECTING:
+            return LiveFeedStatus.RECONNECTING
+        if provider_health is LiveProviderHealth.RATE_LIMITED:
+            return LiveFeedStatus.RATE_LIMITED
+        if provider_health is LiveProviderHealth.OFFLINE:
+            return LiveFeedStatus.OFFLINE
+        if market_state is LiveMarketState.PRE_MARKET:
+            return LiveFeedStatus.PRE_MARKET
+        if market_state is LiveMarketState.AFTER_HOURS:
+            return LiveFeedStatus.AFTER_HOURS
+        if market_state is LiveMarketState.MARKET_CLOSED:
+            return LiveFeedStatus.MARKET_CLOSED
+        if last_market_bar_timestamp is None or now - last_market_bar_timestamp > timedelta(seconds=self._interval_seconds() * 2):
+            return LiveFeedStatus.DELAYED
+        return LiveFeedStatus.LIVE
+
+    def _record_event(self, symbol: str, event_type: str, summary: str, metadata: dict[str, object]) -> None:
+        state = self._visible_state(symbol)
         self.repository.save_event(symbol, state, event_type, summary, metadata, self.settings.live_retention)
         log_event(self.logger, event_type, artifact_id=symbol, workflow="live_market", provider=state.provider, feed_status=state.status.value)
 

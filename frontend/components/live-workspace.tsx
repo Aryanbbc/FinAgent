@@ -6,7 +6,7 @@ import { RegimeStrip } from "@/components/terminal-charts";
 import type { LiveBar, LiveEvent, LiveFeedState, LiveSignal, LiveSnapshot } from "@/lib/api";
 import { api } from "@/lib/api";
 import { dateTime, label, percent } from "@/lib/format";
-import { liveActionTone, liveRegimeHistory, liveStatusLabel, liveStatusTone } from "@/lib/live";
+import { liveActionTone, liveProviderHealthTone, liveRegimeHistory, liveStatusLabel, liveStatusTone } from "@/lib/live";
 
 type Props = {
   initialSymbols: { symbol: string; provider: string; interval: string }[];
@@ -57,11 +57,11 @@ export function LiveWorkspace({ initialSymbols, initialState, initialSnapshot, i
   const decision = snapshot?.latest_signal;
   const regimeHistory = liveRegimeHistory(signals);
   return <div className="live-workspace">
-    <header className="terminal-page-head live-page-head"><div><p className="eyebrow">Live market intelligence</p><h1>Live research terminal</h1><p className="subtle">Live market intelligence only — no order execution.</p></div><div className={`live-feed-status ${liveStatusTone(feed.status)}`}><strong>{feed.status}</strong><span>{liveStatusLabel(feed.status)}</span></div></header>
+    <header className="terminal-page-head live-page-head"><div><p className="eyebrow">Live market intelligence</p><h1>Live research terminal</h1><p className="subtle">Live market intelligence only — no order execution.</p></div><div className={`live-feed-status ${liveStatusTone(feed.status)}`}><strong>FEED · {feed.status}</strong><span>{liveStatusLabel(feed.status)}</span><small>MARKET · {feed.market_state} <b className={liveProviderHealthTone(feed.provider_health)}>PROVIDER · {feed.provider_health}</b></small></div></header>
 
     <section className="live-control-strip">
       <label>Symbol<select aria-label="Live symbol" value={symbol} onChange={(event) => setSymbol(event.target.value)}>{initialSymbols.map((item) => <option key={item.symbol} value={item.symbol}>{item.symbol}</option>)}</select></label>
-      <LiveMetric label="Provider" value={feed.provider}/><LiveMetric label="Feed" value={feed.feed_mode}/><LiveMetric label="Interval" value={feed.interval}/><LiveMetric label="Last update" value={dateTime(feed.last_successful_update)}/><LiveMetric label="Buffered" value={`${feed.bars_buffered} bars`}/>
+      <LiveMetric label="Provider" value={feed.provider}/><LiveMetric label="Provider health" value={feed.provider_health}/><LiveMetric label="Market state" value={feed.market_state}/><LiveMetric label="Feed state" value={feed.status}/><LiveMetric label="Last market bar" value={dateTime(feed.last_market_bar_timestamp)}/><LiveMetric label="Last provider poll" value={dateTime(feed.last_successful_provider_poll)}/><LiveMetric label="Buffered" value={`${feed.bars_buffered} bars`}/>
       <button onClick={() => void refreshWithHistory()} disabled={refreshing}>{refreshing ? "Updating…" : "Refresh"}</button>
     </section>
     {error && <section className="request-state error"><span>Live update unavailable</span><p>{error}</p><button onClick={() => void refreshWithHistory()}>Retry update</button></section>}

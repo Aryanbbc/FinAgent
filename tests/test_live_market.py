@@ -14,7 +14,8 @@ from finagent.api.settings import Settings
 from finagent.data.market_provider import MarketDataProviderError
 from finagent.database.db import Database
 from finagent.live.buffer import RollingOHLCVBuffer
-from finagent.live.models import LiveFeedStatus, LiveMarketBar
+from finagent.live.market_session import LiveMarketState, USEquityMarketCalendar
+from finagent.live.models import LiveFeedStatus, LiveMarketBar, LiveProviderHealth
 from finagent.live.provider import LiveMarketProvider, TwelveDataLiveProvider
 from finagent.live.repository import LiveMarketRepository
 from finagent.live.service import LiveMarketService
@@ -83,6 +84,21 @@ def _service(tmp_path: Path, provider: LiveMarketProvider, clock: Clock, *, enab
     return LiveMarketService(settings, repository, provider=provider, clock=clock)
 
 
+@pytest.mark.parametrize(
+    ("timestamp", "expected"),
+    [
+        (datetime(2025, 9, 2, 15, 0, tzinfo=UTC), LiveMarketState.LIVE),  # 11:00 EDT regular session
+        (datetime(2025, 9, 6, 15, 0, tzinfo=UTC), LiveMarketState.MARKET_CLOSED),  # Saturday
+        (datetime(2025, 9, 1, 15, 0, tzinfo=UTC), LiveMarketState.MARKET_CLOSED),  # Labor Day
+        (datetime(2025, 9, 2, 12, 30, tzinfo=UTC), LiveMarketState.PRE_MARKET),  # 08:30 EDT
+        (datetime(2025, 9, 2, 21, 0, tzinfo=UTC), LiveMarketState.AFTER_HOURS),  # 17:00 EDT
+        (datetime(2025, 1, 2, 15, 0, tzinfo=UTC), LiveMarketState.LIVE),  # 10:00 EST, DST-aware
+    ],
+)
+def test_us_equity_calendar_classifies_sessions_holidays_weekends_and_dst(timestamp: datetime, expected: LiveMarketState) -> None:
+    assert USEquityMarketCalendar().state_at(timestamp) is expected
+
+
 def test_twelve_live_provider_parses_recent_ohlcv_in_chronological_order() -> None:
     payload = {
         "status": "ok",
@@ -121,6 +137,8 @@ def test_live_service_recomputes_features_regime_agents_and_persists_signal(tmp_
     signal = snapshot["latest_signal"]
 
     assert snapshot["status"] == LiveFeedStatus.LIVE.value
+    assert snapshot["provider_health"] == LiveProviderHealth.OK.value
+    assert snapshot["market_state"] == LiveMarketState.LIVE.value
     assert snapshot["bars_buffered"] == 80
     assert signal is not None
     # The most recent mocked minute is the in-progress display candle; the
@@ -134,6 +152,47 @@ def test_live_service_recomputes_features_regime_agents_and_persists_signal(tmp_
     assert service.signals("AAPL", 10)[0]["timestamp"] == signal["timestamp"]
     event_types = {item["event_type"] for item in service.events("AAPL", 20)}
     assert {"LIVE_BAR_COMPLETED", "LIVE_REGIME_CHANGED", "LIVE_AGENT_DECISION", "LIVE_SIGNAL_CREATED"} <= event_types
+
+
+def test_closed_market_is_not_delayed_when_provider_health_is_ok(tmp_path: Path) -> None:
+    saturday = datetime(2025, 9, 6, 15, 0, tzinfo=UTC)
+    service = _service(tmp_path, SequencedLiveProvider([_bars(saturday - timedelta(days=1))]), Clock(saturday))
+
+    snapshot = service.refresh("AAPL")
+
+    assert snapshot["provider_health"] == LiveProviderHealth.OK.value
+    assert snapshot["market_state"] == LiveMarketState.MARKET_CLOSED.value
+    assert snapshot["status"] == LiveFeedStatus.MARKET_CLOSED.value
+    assert snapshot["last_market_bar_timestamp"] == (saturday - timedelta(days=1)).isoformat()
+    assert snapshot["last_successful_provider_poll"] == saturday.isoformat()
+
+
+def test_provider_health_is_ok_but_open_market_old_bar_is_delayed(tmp_path: Path) -> None:
+    open_market = datetime(2025, 9, 2, 15, 0, tzinfo=UTC)
+    service = _service(tmp_path, SequencedLiveProvider([_bars(open_market - timedelta(minutes=10))]), Clock(open_market))
+
+    snapshot = service.refresh("AAPL")
+
+    assert snapshot["provider_health"] == LiveProviderHealth.OK.value
+    assert snapshot["market_state"] == LiveMarketState.LIVE.value
+    assert snapshot["status"] == LiveFeedStatus.DELAYED.value
+
+
+def test_feed_transitions_from_pre_market_to_live_on_fresh_market_bars(tmp_path: Path) -> None:
+    pre_market = datetime(2025, 9, 2, 13, 0, tzinfo=UTC)  # 09:00 EDT
+    open_market = datetime(2025, 9, 2, 13, 31, tzinfo=UTC)  # 09:31 EDT
+    clock = Clock(pre_market)
+    service = _service(tmp_path, SequencedLiveProvider([_bars(pre_market), _bars(open_market)]), clock)
+
+    before_open = service.refresh("AAPL")
+    clock.advance(int((open_market - pre_market).total_seconds()))
+    after_open = service.refresh("AAPL")
+
+    assert before_open["market_state"] == LiveMarketState.PRE_MARKET.value
+    assert before_open["status"] == LiveFeedStatus.PRE_MARKET.value
+    assert after_open["provider_health"] == LiveProviderHealth.OK.value
+    assert after_open["market_state"] == LiveMarketState.LIVE.value
+    assert after_open["status"] == LiveFeedStatus.LIVE.value
 
 
 def test_live_service_handles_rate_limit_with_bounded_reconnect_then_recovers(tmp_path: Path) -> None:
@@ -152,6 +211,7 @@ def test_live_service_handles_rate_limit_with_bounded_reconnect_then_recovers(tm
     recovered = service.refresh("AAPL")
 
     assert limited["status"] == LiveFeedStatus.RATE_LIMITED.value
+    assert limited["provider_health"] == LiveProviderHealth.RATE_LIMITED.value
     assert suppressed["status"] == LiveFeedStatus.RATE_LIMITED.value and calls_while_suppressed == 1
     assert recovered["status"] == LiveFeedStatus.LIVE.value and provider.calls == 2
     event_types = {item["event_type"] for item in service.events("AAPL", 20)}

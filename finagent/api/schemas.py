@@ -311,12 +311,16 @@ class LiveBar(APIModel):
 class LiveFeedStateResponse(APIModel):
     symbol: str
     enabled: bool
-    status: Literal["CONNECTING", "LIVE", "DELAYED", "RECONNECTING", "RATE_LIMITED", "OFFLINE"]
+    status: Literal["CONNECTING", "PRE_MARKET", "LIVE", "AFTER_HOURS", "MARKET_CLOSED", "DELAYED", "RECONNECTING", "RATE_LIMITED", "OFFLINE"]
+    provider_health: Literal["CONNECTING", "OK", "RECONNECTING", "RATE_LIMITED", "OFFLINE"]
+    market_state: Literal["PRE_MARKET", "LIVE", "AFTER_HOURS", "MARKET_CLOSED"]
     provider: str
     feed_mode: Literal["polling"]
     interval: Literal["1min", "5min", "15min"]
     last_updated: str | None = None
     last_successful_update: str | None = None
+    last_market_bar_timestamp: str | None = None
+    last_successful_provider_poll: str | None = None
     message: str | None = None
     bars_buffered: int = Field(ge=0)
 

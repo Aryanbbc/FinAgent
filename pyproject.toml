@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.1",
+    "exchange-calendars>=4.5,<5.0",
     "pydantic>=2.7,<3.0",
     "PyYAML>=6.0",
     "psycopg[binary]>=3.2,<4.0",

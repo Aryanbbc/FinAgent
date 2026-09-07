@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { liveActionTone, liveRegimeHistory, liveStatusLabel, liveStatusTone } from "../lib/live";
+import { liveActionTone, liveProviderHealthTone, liveRegimeHistory, liveStatusLabel, liveStatusTone } from "../lib/live";
 import type { LiveSignal } from "../lib/api";
 
 const signal = (timestamp: string, regime: string, action: LiveSignal["action"]): LiveSignal => ({
@@ -13,9 +13,14 @@ const signal = (timestamp: string, regime: string, action: LiveSignal["action"])
 
 test("live UI adapters expose explicit feed states and signal tones", () => {
   assert.equal(liveStatusLabel("RATE_LIMITED"), "Provider rate limit reached");
+  assert.equal(liveStatusLabel("MARKET_CLOSED"), "U.S. equity market is closed");
   assert.equal(liveStatusTone("LIVE"), "positive");
+  assert.equal(liveStatusTone("PRE_MARKET"), "notice");
+  assert.equal(liveStatusTone("MARKET_CLOSED"), "notice");
   assert.equal(liveStatusTone("RECONNECTING"), "notice");
   assert.equal(liveStatusTone("OFFLINE"), "negative");
+  assert.equal(liveProviderHealthTone("OK"), "positive");
+  assert.equal(liveProviderHealthTone("RATE_LIMITED"), "negative");
   assert.equal(liveActionTone("BUY"), "positive");
   assert.equal(liveActionTone("EXIT"), "negative");
 });

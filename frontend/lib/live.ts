@@ -1,11 +1,14 @@
 "use client";
 
-import type { LiveFeedStatus, LiveSignal, RegimeObservation } from "@/lib/api";
+import type { LiveFeedStatus, LiveProviderHealth, LiveSignal, RegimeObservation } from "@/lib/api";
 
 export function liveStatusLabel(status: LiveFeedStatus) {
   return ({
     CONNECTING: "Connecting to bounded market feed",
+    PRE_MARKET: "U.S. equity pre-market session",
     LIVE: "Recent market feed active",
+    AFTER_HOURS: "U.S. equity after-hours session",
+    MARKET_CLOSED: "U.S. equity market is closed",
     DELAYED: "Recent data is delayed",
     RECONNECTING: "Reconnecting with bounded backoff",
     RATE_LIMITED: "Provider rate limit reached",
@@ -15,7 +18,13 @@ export function liveStatusLabel(status: LiveFeedStatus) {
 
 export function liveStatusTone(status: LiveFeedStatus) {
   if (status === "LIVE") return "positive";
-  if (status === "CONNECTING" || status === "RECONNECTING" || status === "DELAYED") return "notice";
+  if (status === "CONNECTING" || status === "RECONNECTING" || status === "DELAYED" || status === "PRE_MARKET" || status === "AFTER_HOURS" || status === "MARKET_CLOSED") return "notice";
+  return "negative";
+}
+
+export function liveProviderHealthTone(health: LiveProviderHealth) {
+  if (health === "OK") return "positive";
+  if (health === "CONNECTING" || health === "RECONNECTING") return "notice";
   return "negative";
 }
 
