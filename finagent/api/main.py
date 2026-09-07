@@ -104,8 +104,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(MarketDataProviderError)
     async def provider_error(request: Request, error: MarketDataProviderError) -> JSONResponse:
-        status = 503 if error.code in {"PROVIDER_UNAVAILABLE", "RATE_LIMIT"} else 400
-        return error_response(request, status, error.code, str(error))
+        status = error.status if error.status is not None else (503 if error.retryable else 400)
+        # Internal provider failures without a meaningful upstream HTTP status
+        # remain a service availability response rather than leaking a 200/3xx.
+        if status < 400 or status > 599:
+            status = 503 if error.retryable else 400
+        return error_response(request, status, error.code, str(error), error.details())
 
     @app.exception_handler(RequestValidationError)
     async def request_validation(request: Request, error: RequestValidationError) -> JSONResponse:

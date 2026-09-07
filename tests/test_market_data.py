@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 import pandas as pd
 import pytest
 import yaml
 
 from finagent.data.manager import DatasetManager
-from finagent.data.market_provider import LocalCSVProvider, MarketDataProvider, MarketDataProviderError, ProviderRegistry, YahooFinanceProvider
+from finagent.data.market_provider import LocalCSVProvider, MarketDataProvider, MarketDataProviderError, ProviderRegistry, StooqProvider, YahooFinanceProvider
 from finagent.data.models import AssetMetadata, MarketDataRequest, MissingDataPolicy
 from finagent.data.quality import DataValidationPipeline
 from finagent.data.registry import DatasetRegistry
@@ -39,6 +40,28 @@ class MutableProvider(MarketDataProvider):
     def fetch_metadata(self, request: MarketDataRequest) -> AssetMetadata: return AssetMetadata(request.symbol, "Mock", "TEST", "USD", request.asset_class, "UTC", "unadjusted")
 
 
+class SequencedProvider(MarketDataProvider):
+    """Deterministic provider fake for retry/fallback tests without network I/O."""
+
+    def __init__(self, provider_name: str, outcomes: list[pd.DataFrame | MarketDataProviderError]) -> None:
+        self.provider_name = provider_name
+        self.outcomes = outcomes
+        self.calls = 0
+
+    def validate_request(self, request: MarketDataRequest) -> None:
+        return None
+
+    def fetch_ohlcv(self, request: MarketDataRequest) -> pd.DataFrame:
+        self.calls += 1
+        outcome = self.outcomes[min(self.calls - 1, len(self.outcomes) - 1)]
+        if isinstance(outcome, MarketDataProviderError):
+            raise outcome
+        return outcome.copy()
+
+    def fetch_metadata(self, request: MarketDataRequest) -> AssetMetadata:
+        return AssetMetadata(request.symbol, f"{self.provider_name} metadata", asset_class=request.asset_class, adjustment_mode="unadjusted")
+
+
 def test_local_csv_provider_and_yahoo_adapter_normalize_without_live_internet() -> None:
     local = LocalCSVProvider().fetch_ohlcv(MarketDataRequest("EXAMPLE", "2024-01-01", "2024-03-01", source_path=str(PROJECT_ROOT / "data/raw/example_ohlcv.csv")))
     assert list(local.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
@@ -48,6 +71,104 @@ def test_local_csv_provider_and_yahoo_adapter_normalize_without_live_internet() 
     assert len(frame) == 2 and provider.fetch_metadata(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03")).adjustment_mode == "unadjusted"
     with pytest.raises(MarketDataProviderError, match="daily"):
         provider.fetch_ohlcv(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03", interval="1h"))
+    stooq = StooqProvider(lambda _: b"Date,Open,High,Low,Close,Volume\n2024-01-02,10,11,9,10.5,100\n")
+    assert list(stooq.fetch_ohlcv(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03")).columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+
+
+@pytest.mark.parametrize(("failure", "expected_code", "expected_status"), [
+    (HTTPError("https://example.test", 429, "rate limited", None, None), "RATE_LIMIT", 429),
+    (HTTPError("https://example.test", 503, "unavailable", None, None), "PROVIDER_UNAVAILABLE", 503),
+    (URLError("temporary network failure"), "PROVIDER_UNAVAILABLE", None),
+])
+def test_yahoo_transient_transport_errors_are_structured_and_retryable(
+    failure: BaseException, expected_code: str, expected_status: int | None,
+) -> None:
+    def failed_request(_: str) -> bytes:
+        raise failure
+
+    with pytest.raises(MarketDataProviderError) as raised:
+        YahooFinanceProvider(failed_request).fetch_ohlcv(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03"))
+
+    assert raised.value.code == expected_code
+    assert raised.value.details()["status"] == expected_status
+    assert raised.value.details()["retryable"] is True
+
+
+def test_auto_provider_uses_yahoo_success_and_persists_provenance(tmp_path: Path) -> None:
+    yahoo = SequencedProvider("yahoo_finance", [_frame()])
+    stooq = SequencedProvider("stooq", [_frame(close=11.0)])
+    registry = DatasetRegistry(Database(tmp_path / "datasets.db"))
+    manager = DatasetManager(registry, tmp_path / "cache", ProviderRegistry((yahoo, stooq)), max_attempts=2, sleep=lambda _: None)
+
+    result = manager.fetch("auto", MarketDataRequest("AAPL", "2024-01-01", "2024-01-10"))
+
+    assert result.actual_provider == "yahoo_finance" and not result.fallback_used
+    assert yahoo.calls == 1 and stooq.calls == 0
+    assert result.dataset.metadata.requested_provider == "auto"
+    assert result.dataset.metadata.actual_provider == "yahoo_finance"
+    assert result.dataset.metadata.requested_date_range == {"start_date": "2024-01-01", "end_date": "2024-01-10"}
+    assert result.dataset.metadata.fetch_timestamp is not None
+
+
+def test_auto_retries_yahoo_rate_limit_then_uses_stooq_fallback(tmp_path: Path) -> None:
+    rate_limit = MarketDataProviderError("RATE_LIMIT", "Yahoo Finance request failed with HTTP 429.", provider="yahoo_finance", status=429, retryable=True)
+    yahoo = SequencedProvider("yahoo_finance", [rate_limit])
+    stooq = SequencedProvider("stooq", [_frame(close=11.0)])
+    manager = DatasetManager(
+        DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((yahoo, stooq)),
+        max_attempts=2, retry_backoff_seconds=0.01, sleep=lambda _: None,
+    )
+
+    result = manager.fetch("auto", MarketDataRequest("AAPL", "2024-01-01", "2024-01-10"))
+
+    assert result.actual_provider == "stooq" and result.fallback_used
+    assert yahoo.calls == 2 and stooq.calls == 1
+    assert [attempt["status"] for attempt in result.attempts] == [429, 429]
+    assert result.dataset.metadata.requested_provider == "auto"
+    assert result.dataset.metadata.actual_provider == "stooq"
+
+
+def test_auto_reports_structured_error_when_yahoo_and_fallback_fail(tmp_path: Path) -> None:
+    yahoo = SequencedProvider("yahoo_finance", [MarketDataProviderError("RATE_LIMIT", "Yahoo rate limited", provider="yahoo_finance", status=429, retryable=True)])
+    stooq = SequencedProvider("stooq", [MarketDataProviderError("PROVIDER_UNAVAILABLE", "Stooq unavailable", provider="stooq", status=503, retryable=True)])
+    manager = DatasetManager(DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((yahoo, stooq)), max_attempts=1, sleep=lambda _: None)
+
+    with pytest.raises(MarketDataProviderError) as failure:
+        manager.fetch("auto", MarketDataRequest("AAPL", "2024-01-01", "2024-01-10"))
+
+    assert failure.value.code == "ALL_PROVIDERS_FAILED"
+    assert failure.value.details() == {
+        "provider": "auto", "status": 503, "reason": "yahoo_finance: Yahoo rate limited; stooq: Stooq unavailable",
+        "retryable": True, "fallback_used": True,
+    }
+
+
+def test_auto_cache_hit_avoids_repeating_provider_requests(tmp_path: Path) -> None:
+    yahoo = SequencedProvider("yahoo_finance", [_frame()])
+    stooq = SequencedProvider("stooq", [_frame(close=11.0)])
+    manager = DatasetManager(DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((yahoo, stooq)), sleep=lambda _: None)
+    request = MarketDataRequest("AAPL", "2024-01-01", "2024-01-10")
+
+    first = manager.fetch("auto", request)
+    cached = manager.fetch("auto", request)
+
+    assert not first.cache_hit and cached.cache_hit
+    assert yahoo.calls == 1 and stooq.calls == 0
+    assert cached.actual_provider == "yahoo_finance"
+
+
+def test_auto_and_explicit_provider_keep_distinct_dataset_identities(tmp_path: Path) -> None:
+    yahoo = SequencedProvider("yahoo_finance", [_frame()])
+    stooq = SequencedProvider("stooq", [_frame(close=11.0)])
+    manager = DatasetManager(DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((yahoo, stooq)), sleep=lambda _: None)
+    request = MarketDataRequest("AAPL", "2024-01-01", "2024-01-10")
+
+    explicit = manager.fetch("yahoo_finance", request)
+    automatic = manager.fetch("auto", request)
+
+    assert explicit.dataset.dataset_id == "DATA-YAHOO-FINANCE-AAPL-1D"
+    assert automatic.dataset.dataset_id == "DATA-AUTO-AAPL-1D"
+    assert automatic.dataset.provider == "yahoo_finance"
 
 
 def test_quality_pipeline_reports_gaps_and_never_backfills_future_values() -> None:

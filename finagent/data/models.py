@@ -55,6 +55,13 @@ class AssetMetadata:
     asset_class: str = "unknown"
     timezone: str | None = "UTC"
     adjustment_mode: str = "unknown"
+    # Fetch provenance is stored with every immutable dataset revision.  These
+    # optional fields keep older V0.8 records readable while making an
+    # automatic provider fallback transparent to research consumers.
+    requested_provider: str | None = None
+    actual_provider: str | None = None
+    fetch_timestamp: str | None = None
+    requested_date_range: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +72,10 @@ class AssetMetadata:
             "asset_class": self.asset_class,
             "timezone": self.timezone,
             "adjustment_mode": self.adjustment_mode,
+            "requested_provider": self.requested_provider,
+            "actual_provider": self.actual_provider,
+            "fetch_timestamp": self.fetch_timestamp,
+            "requested_date_range": self.requested_date_range,
         }
 
 

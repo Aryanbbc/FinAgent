@@ -177,10 +177,16 @@ class DatasetRegistry:
         checksum: str,
         validation: DatasetValidationResult,
         metadata: AssetMetadata,
+        dataset_provider: str | None = None,
     ) -> DatasetVersion:
         """Create a new immutable content revision, or touch the matching cached revision."""
         now = datetime.now(UTC).isoformat()
         path = str(cache_path)
+        # Dataset identity may be the requested ``auto`` selector while the
+        # immutable version records the concrete provider that supplied rows.
+        # Keeping those two notions distinct avoids uniqueness collisions with
+        # an explicitly requested Yahoo or Stooq dataset for the same symbol.
+        dataset_provider = dataset_provider or provider
         with self.database.connect() as connection:
             existing = connection.execute("SELECT * FROM dataset_versions WHERE dataset_id = ? AND checksum = ?", (dataset_id, checksum)).fetchone()
             if existing is not None:
@@ -197,7 +203,7 @@ class DatasetRegistry:
             connection.execute(
                 "INSERT INTO datasets (dataset_id, provider, symbol, interval, created_at) VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(dataset_id) DO NOTHING",
-                (dataset_id, provider, symbol, interval, now),
+                (dataset_id, dataset_provider, symbol, interval, now),
             )
             connection.execute(
                 """INSERT INTO dataset_versions (

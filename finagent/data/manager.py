@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from datetime import date, timedelta
+import time
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
-from finagent.data.market_provider import MarketDataProviderError, ProviderRegistry
+from finagent.data.market_provider import MarketDataProvider, MarketDataProviderError, ProviderRegistry
 from finagent.data.models import DatasetVersion, MarketDataRequest, MissingDataPolicy
 from finagent.data.quality import DataValidationPipeline
 from finagent.data.registry import DatasetRegistry
@@ -19,20 +21,39 @@ from finagent.data.registry import DatasetRegistry
 class DatasetFetchResult:
     dataset: DatasetVersion
     cache_hit: bool
+    requested_provider: str
+    actual_provider: str
+    fallback_used: bool
+    attempts: tuple[dict[str, object], ...] = ()
 
 
 class DatasetManager:
     """Coordinates providers, validation, cache revisions, and metadata without trading behavior."""
 
-    def __init__(self, registry: DatasetRegistry, cache_root: str | Path, providers: ProviderRegistry | None = None, pipeline: DataValidationPipeline | None = None) -> None:
+    def __init__(
+        self,
+        registry: DatasetRegistry,
+        cache_root: str | Path,
+        providers: ProviderRegistry | None = None,
+        pipeline: DataValidationPipeline | None = None,
+        *,
+        max_attempts: int = 3,
+        retry_backoff_seconds: float = 0.25,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.registry = registry
         self.cache_root = Path(cache_root)
         self.providers = providers or ProviderRegistry()
         self.pipeline = pipeline or DataValidationPipeline()
+        self.max_attempts = max(1, max_attempts)
+        self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self._sleep = sleep
 
     def fetch(self, provider_name: str, request: MarketDataRequest, policy: MissingDataPolicy = MissingDataPolicy.REJECT) -> DatasetFetchResult:
-        provider = self.providers.get(provider_name)
-        provider.validate_request(request)
+        candidates = self.providers.candidates(provider_name)
+        # Validate before looking at the cache so invalid requests cannot reuse
+        # a historical revision merely because its identifier happens to match.
+        candidates[0].validate_request(request)
         dataset_id = self.registry.make_dataset_id(provider_name, request.symbol, request.interval)
         if not request.force_refresh:
             try:
@@ -42,13 +63,20 @@ class DatasetManager:
                     and (self.registry.has_ohlcv(cached.version_id) or Path(cached.cache_path).is_file())
                     and self._cached_covers(cached, request)
                 ):
-                    return DatasetFetchResult(cached, True)
+                    actual_provider = cached.metadata.actual_provider or cached.provider
+                    return DatasetFetchResult(
+                        cached,
+                        True,
+                        provider_name,
+                        actual_provider,
+                        provider_name == self.providers.auto_provider and actual_provider != "yahoo_finance",
+                    )
             except LookupError:
                 pass
-        raw = provider.fetch_ohlcv(request)
+        raw, provider, attempts, fallback_used = self._fetch_from_candidates(provider_name, candidates, request)
         frame, validation = self.pipeline.prepare(raw, policy)
         if frame.empty:
-            raise MarketDataProviderError("EMPTY_RESULT", f"No usable rows returned for {request.symbol}.")
+            raise MarketDataProviderError("EMPTY_RESULT", f"No usable rows returned for {request.symbol}.", provider=provider.provider_name)
         checksum = self._checksum(frame)
         version_number = self.registry.next_version_number(dataset_id)
         cache_path = self._cache_path(provider_name, request.symbol, request.interval, dataset_id, version_number)
@@ -64,16 +92,85 @@ class DatasetManager:
             temporary.replace(cache_path)
         else:
             cache_path = Path(previous.cache_path)
-        metadata = provider.fetch_metadata(request)
+        metadata = replace(
+            provider.fetch_metadata(request),
+            requested_provider=provider_name,
+            actual_provider=provider.provider_name,
+            fetch_timestamp=datetime.now(UTC).isoformat(),
+            requested_date_range={"start_date": request.start_date, "end_date": request.end_date},
+        )
         dataset = self.registry.save_version(
-            dataset_id=dataset_id, provider=provider_name, symbol=request.symbol, interval=request.interval,
+            dataset_id=dataset_id, provider=provider.provider_name, symbol=request.symbol, interval=request.interval,
             start_date=str(frame["timestamp"].iloc[0].date()), end_date=str(frame["timestamp"].iloc[-1].date()),
             row_count=len(frame), cache_path=cache_path, checksum=checksum, validation=validation, metadata=metadata,
+            dataset_provider=provider_name,
         )
         # The CSV cache remains a local-development convenience.  The immutable
         # canonical rows make production datasets durable across Render restarts.
         self.registry.store_ohlcv(dataset.version_id, frame)
-        return DatasetFetchResult(dataset, False)
+        return DatasetFetchResult(dataset, False, provider_name, provider.provider_name, fallback_used, tuple(attempts))
+
+    def _fetch_from_candidates(
+        self,
+        requested_provider: str,
+        candidates: tuple[MarketDataProvider, ...],
+        request: MarketDataRequest,
+    ) -> tuple[pd.DataFrame, MarketDataProvider, list[dict[str, object]], bool]:
+        """Fetch from the selected provider(s), retrying only transient errors.
+
+        ``auto`` has a fixed public-provider order.  A fallback is considered
+        only after the current provider reports a retryable failure, so a bad
+        symbol or malformed request cannot be silently masked by another feed.
+        """
+        attempts: list[dict[str, object]] = []
+        errors: list[MarketDataProviderError] = []
+        for index, candidate in enumerate(candidates):
+            provider = candidate
+            try:
+                raw = self._fetch_with_retry(provider, request, attempts)
+                return raw, provider, attempts, index > 0
+            except MarketDataProviderError as error:
+                error.provider = error.provider or provider.provider_name
+                errors.append(error)
+                if requested_provider != self.providers.auto_provider or not error.retryable or index == len(candidates) - 1:
+                    if requested_provider == self.providers.auto_provider and len(errors) > 1:
+                        raise self._fallback_failure(errors) from error
+                    error.fallback_used = index > 0
+                    raise
+        # ``ProviderRegistry.candidates`` guarantees a non-empty sequence.
+        raise self._fallback_failure(errors)
+
+    def _fetch_with_retry(self, provider: MarketDataProvider, request: MarketDataRequest, attempts: list[dict[str, object]]) -> pd.DataFrame:
+        for attempt_number in range(1, self.max_attempts + 1):
+            try:
+                return provider.fetch_ohlcv(request)
+            except MarketDataProviderError as error:
+                error.provider = error.provider or provider.provider_name
+                attempts.append({
+                    "provider": error.provider,
+                    "attempt": attempt_number,
+                    "status": error.status,
+                    "reason": error.reason,
+                    "retryable": error.retryable,
+                })
+                if not error.retryable or attempt_number == self.max_attempts:
+                    raise
+                self._sleep(self.retry_backoff_seconds * (2 ** (attempt_number - 1)))
+        raise AssertionError("unreachable retry loop")
+
+    @staticmethod
+    def _fallback_failure(errors: list[MarketDataProviderError]) -> MarketDataProviderError:
+        final = errors[-1]
+        reason = "; ".join(f"{error.provider}: {error.reason}" for error in errors)
+        return MarketDataProviderError(
+            "ALL_PROVIDERS_FAILED",
+            "All configured public historical-data providers failed.",
+            provider="auto",
+            status=final.status,
+            reason=reason,
+            retryable=any(error.retryable for error in errors),
+            fallback_used=True,
+        )
 
     def validate(self, dataset_id: str, policy: MissingDataPolicy = MissingDataPolicy.REJECT) -> DatasetVersion:
         dataset = self.registry.latest(dataset_id)

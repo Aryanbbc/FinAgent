@@ -27,6 +27,7 @@ export type OhlcvRow = { timestamp: string; open: number; high: number; low: num
 export type OhlcvSeries = { dataset_id: string | null; version_id: string | null; items: OhlcvRow[]; downsampled: boolean };
 export type ActivityEvent = { timestamp: string; event_type: string; source: string; artifact_id: string | null; summary: string; metadata: Record<string, unknown> };
 export type DataFetchInput = { provider: string; symbol: string; start_date: string; end_date: string; interval: "1d"; force_refresh: boolean; source_path?: string; asset_class?: string; missing_data_policy?: "reject" | "forward_fill" | "drop" | "warn_only" };
+export type DataFetchResult = { dataset: DatasetSummary; cache_hit: boolean; requested_provider: string; actual_provider: string; fallback_used: boolean; attempts: { provider: string | null; attempt: number; status: number | null; reason: string; retryable: boolean }[] };
 export type ExperimentRunInput = {
   config_path: string; dataset_id?: string; strategy_name?: "moving_average" | "momentum" | "mean_reversion";
   agents_enabled?: boolean; starting_capital?: number; percentage_fee?: number; fixed_fee?: number;
@@ -70,7 +71,7 @@ export const api = {
   datasets: (query = "") => request<{ items: DatasetSummary[]; pagination: Pagination }>(`/api/data/datasets${query}`),
   dataset: (id: string) => request<Dataset>(`/api/data/datasets/${id}`),
   datasetOhlcv: (id: string, query = "") => request<OhlcvSeries>(`/api/data/datasets/${id}/ohlcv${query}`),
-  fetchData: (input: DataFetchInput) => request<{ dataset: DatasetSummary; cache_hit: boolean }>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
+  fetchData: (input: DataFetchInput) => request<DataFetchResult>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
   validateData: (dataset_id: string, missing_data_policy = "reject") => request<DatasetSummary>("/api/data/validate", { method: "POST", body: JSON.stringify({ dataset_id, missing_data_policy }) }),
   dataCollections: (query = "") => request<{ items: { collection_id: string; name: string; description: string | null; members: { dataset_id: string; version_id: string; symbol: string; adjustment_mode: string }[]; created_at: string | null; warnings: string[] }[]; pagination: Pagination }>(`/api/data/collections${query}`),
   run: (workflow: "experiments" | "improvements" | "validation", input: string | ExperimentRunInput, dataset_id?: string) => {

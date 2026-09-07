@@ -83,7 +83,7 @@ def test_missing_artifacts_return_consistent_404(client: tuple[TestClient, str, 
 
 def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestClient, str, str]) -> None:
     api, _, _ = client
-    assert {item["provider"] for item in api.get("/api/data/providers").json()} >= {"local_csv", "yahoo_finance"}
+    assert {item["provider"] for item in api.get("/api/data/providers").json()} >= {"auto", "local_csv", "stooq", "yahoo_finance"}
     fetched = api.post(
         "/api/data/fetch",
         json={
@@ -92,10 +92,14 @@ def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestCl
         },
     )
     assert fetched.status_code == 200
+    assert fetched.json()["requested_provider"] == "local_csv"
+    assert fetched.json()["actual_provider"] == "local_csv"
+    assert not fetched.json()["fallback_used"]
     dataset_id = fetched.json()["dataset"]["dataset_id"]
     assert api.get("/api/data/datasets").json()["pagination"]["total"] == 1
     detail = api.get(f"/api/data/datasets/{dataset_id}")
     assert detail.status_code == 200 and detail.json()["sample_rows"]
+    assert detail.json()["metadata"]["actual_provider"] == "local_csv"
     series = api.get(f"/api/data/datasets/{dataset_id}/ohlcv?limit=20")
     assert series.status_code == 200 and 0 < len(series.json()["items"]) <= 20
     assert api.post("/api/data/validate", json={"dataset_id": dataset_id}).status_code == 200
@@ -105,6 +109,21 @@ def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestCl
     assert run.status_code == 200
     assert run.json()["metadata"]["dataset_id"] == dataset_id
     assert api.get(f"/api/experiments/{run.json()['experiment_id']}").status_code == 200
+
+
+def test_data_provider_failures_return_structured_provenance(client: tuple[TestClient, str, str]) -> None:
+    api, _, _ = client
+    response = api.post(
+        "/api/data/fetch",
+        json={"provider": "unknown_feed", "symbol": "AAPL", "start_date": "2024-01-01", "end_date": "2024-01-10"},
+    )
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error_code"] == "UNKNOWN_PROVIDER"
+    assert payload["details"] == {
+        "provider": "unknown_feed", "status": None, "reason": "Unknown historical data provider: unknown_feed",
+        "retryable": False, "fallback_used": False,
+    }
 
 
 def test_terminal_read_endpoints_use_persisted_market_and_activity_data(client: tuple[TestClient, str, str]) -> None:

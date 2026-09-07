@@ -297,7 +297,7 @@ class ActivityResponse(APIModel):
 
 
 class DataFetchRequest(APIModel):
-    provider: str = Field(min_length=3, max_length=40, pattern=r"^[a-z0-9_]+$")
+    provider: str = Field(default="auto", min_length=3, max_length=40, pattern=r"^[a-z0-9_]+$")
     symbol: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._^=-]+$")
     start_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     end_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
@@ -311,6 +311,10 @@ class DataFetchRequest(APIModel):
 class DataFetchResponse(APIModel):
     dataset: DatasetSummary
     cache_hit: bool
+    requested_provider: str
+    actual_provider: str
+    fallback_used: bool
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DataValidateRequest(APIModel):

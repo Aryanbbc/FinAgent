@@ -529,9 +529,25 @@ class ResearchService:
             source_path=str(raw["source_path"]) if raw.get("source_path") else None,
             asset_class=str(raw.get("asset_class", "equity")),
         )
-        result = self.dataset_manager.fetch(str(raw["provider"]), request, MissingDataPolicy(str(raw.get("missing_data_policy", "reject"))))
-        log_event(self.logger, "DATA_FETCHED", artifact_id=result.dataset.dataset_id, workflow="data_fetch")
-        return {"dataset": self._dataset_summary(result.dataset), "cache_hit": result.cache_hit}
+        result = self.dataset_manager.fetch(str(raw.get("provider", "auto")), request, MissingDataPolicy(str(raw.get("missing_data_policy", "reject"))))
+        log_event(
+            self.logger,
+            "DATA_FETCHED",
+            artifact_id=result.dataset.dataset_id,
+            workflow="data_fetch",
+            requested_provider=result.requested_provider,
+            actual_provider=result.actual_provider,
+            fallback_used=result.fallback_used,
+            cache_hit=result.cache_hit,
+        )
+        return {
+            "dataset": self._dataset_summary(result.dataset),
+            "cache_hit": result.cache_hit,
+            "requested_provider": result.requested_provider,
+            "actual_provider": result.actual_provider,
+            "fallback_used": result.fallback_used,
+            "attempts": list(result.attempts),
+        }
 
     def validate_data(self, dataset_id: str, policy: str) -> dict[str, Any]:
         dataset = self.dataset_manager.validate(dataset_id, MissingDataPolicy(policy))
