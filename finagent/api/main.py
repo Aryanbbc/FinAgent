@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from finagent.api.routes import data, experiments, health, improvements, reports, system, validation
+from finagent.api.routes import data, experiments, health, improvements, live, reports, system, validation
 from finagent.api.settings import Settings
 from finagent.configuration import ConfigurationValidationError
 from finagent.data.market_provider import MarketDataProviderError
@@ -36,12 +36,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except DatabaseError as error:
             logger.error("event=DATABASE_STARTUP_FAILED backend=%s error=%s", runtime.database_backend, error)
             raise RuntimeError(f"FinAgent database startup failed ({runtime.database_backend}): {error}") from error
-        yield
+        await application.state.research_service.start_live_monitoring()
+        try:
+            yield
+        finally:
+            await application.state.research_service.stop_live_monitoring()
 
     app = FastAPI(
         title="FinAgent Research API",
-        version="1.0.0",
-        description="Deterministic historical research, dataset management, and controlled V0.1–V0.9 workflow access. No trading execution is available.",
+        version="1.1.0",
+        description="Deterministic historical research plus opt-in live market intelligence. No trading execution is available.",
         lifespan=lifespan,
     )
     try:
@@ -130,7 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         log_event(logger, "API_UNEXPECTED_ERROR", logging.ERROR, request_id=getattr(request.state, "request_id", None), path=request.url.path, artifact_id=type(error).__name__)
         return error_response(request, 500, "INTERNAL_ERROR", "An unexpected local application error occurred. Check local logs for details.")
 
-    for router in (health.router, experiments.router, improvements.router, validation.router, reports.router, data.router, system.router):
+    for router in (health.router, experiments.router, improvements.router, validation.router, reports.router, data.router, live.router, system.router):
         app.include_router(router)
     return app
 

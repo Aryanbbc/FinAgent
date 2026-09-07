@@ -31,15 +31,15 @@ FINAL_BENCHMARKS = {
 }
 
 
-def test_v10_version_is_aligned_in_package_api_frontend_and_health(tmp_path: Path) -> None:
-    assert __version__ == "1.0.0"
-    assert tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"] == "1.0.0"
+def test_current_version_is_aligned_in_package_api_frontend_and_health(tmp_path: Path) -> None:
+    assert __version__ == "1.1.0"
+    assert tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"] == "1.1.0"
     package = json.loads((PROJECT_ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((PROJECT_ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["version"] == lock["version"] == lock["packages"][""]["version"] == "1.0.0"
+    assert package["version"] == lock["version"] == lock["packages"][""]["version"] == "1.1.0"
     app = create_app(Settings(project_root=PROJECT_ROOT, database_url=f"sqlite:///{tmp_path / 'release.db'}"))
     response = TestClient(app).get("/api/health")
-    assert app.version == response.json()["version"] == "1.0.0"
+    assert app.version == response.json()["version"] == "1.1.0"
 
 
 def test_final_suite_exports_all_release_evidence_without_a_promoted_candidate(tmp_path: Path) -> None:

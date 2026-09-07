@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 _LOCAL_CORS_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
 _VALID_ENVIRONMENTS = {"development", "test", "production"}
+_LIVE_INTERVALS = {"1min", "5min", "15min"}
 
 
 def _environment() -> str:
@@ -44,6 +45,38 @@ def _configured_origins(environment: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*_LOCAL_CORS_ORIGINS, *supplied)))
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
+def _positive_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValueError(f"{name} must be an integer") from error
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _live_symbols() -> tuple[str, ...]:
+    default = os.getenv("LIVE_DEFAULT_SYMBOL", "AAPL")
+    raw = os.getenv("LIVE_SYMBOLS", default)
+    symbols = tuple(item.strip().upper() for item in raw.split(",") if item.strip())
+    if not symbols:
+        raise ValueError("LIVE_DEFAULT_SYMBOL or LIVE_SYMBOLS must contain at least one symbol")
+    return tuple(dict.fromkeys(symbols))
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime locations, platform binding, and explicit CORS origins for FinAgent."""
@@ -56,6 +89,16 @@ class Settings:
     cors_origins: tuple[str, ...] = field(default_factory=lambda: _configured_origins(_environment()))
     data_cache_directory: Path | None = None
     reports_directory: Path | None = None
+    # Live monitoring is an explicit non-executing opt-in.  Credentials are
+    # intentionally not represented here and remain provider-local env values.
+    live_market_enabled: bool = field(default_factory=lambda: _boolean("LIVE_MARKET_ENABLED", False))
+    live_default_symbol: str = field(default_factory=lambda: os.getenv("LIVE_DEFAULT_SYMBOL", "AAPL").strip().upper())
+    live_symbols: tuple[str, ...] = field(default_factory=_live_symbols)
+    live_interval: str = field(default_factory=lambda: os.getenv("LIVE_INTERVAL", "1min").strip())
+    live_buffer_size: int = field(default_factory=lambda: _positive_int("LIVE_BUFFER_SIZE", 300, minimum=50, maximum=5_000))
+    live_poll_seconds: int = field(default_factory=lambda: _positive_int("LIVE_POLL_SECONDS", 60, minimum=15, maximum=3_600))
+    live_retention: int = field(default_factory=lambda: _positive_int("LIVE_RETENTION", 500, minimum=50, maximum=10_000))
+    live_max_backoff_seconds: int = field(default_factory=lambda: _positive_int("LIVE_MAX_BACKOFF_SECONDS", 900, minimum=60, maximum=86_400))
 
     def __post_init__(self) -> None:
         if self.environment not in _VALID_ENVIRONMENTS:
@@ -66,6 +109,13 @@ class Settings:
             raise ValueError("Wildcard CORS origins are not permitted")
         if self.environment == "production" and not any(origin not in _LOCAL_CORS_ORIGINS for origin in self.cors_origins):
             raise ValueError("A deployed FRONTEND_ORIGIN is required in production")
+        if not self.live_default_symbol or any(character.isspace() for character in self.live_default_symbol):
+            raise ValueError("LIVE_DEFAULT_SYMBOL must be a non-empty symbol without whitespace")
+        if self.live_interval not in _LIVE_INTERVALS:
+            choices = ", ".join(sorted(_LIVE_INTERVALS))
+            raise ValueError(f"LIVE_INTERVAL must be one of: {choices}")
+        if self.live_default_symbol not in self.live_symbols:
+            raise ValueError("LIVE_DEFAULT_SYMBOL must be included in LIVE_SYMBOLS")
         normalized_url = self.database_url.lower()
         if not (
             normalized_url.startswith("sqlite://")

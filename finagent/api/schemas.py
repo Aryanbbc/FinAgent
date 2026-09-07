@@ -1,4 +1,4 @@
-"""Stable Pydantic response and request models for the FinAgent 1.0.0 API."""
+"""Stable Pydantic response and request models for the FinAgent 1.1.0 API."""
 
 from __future__ import annotations
 
@@ -295,6 +295,88 @@ class ActivityEvent(APIModel):
 class ActivityResponse(APIModel):
     items: list[ActivityEvent]
     pagination: PaginationMeta
+
+
+class LiveBar(APIModel):
+    symbol: str
+    timestamp: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    provider: str
+
+
+class LiveFeedStateResponse(APIModel):
+    symbol: str
+    enabled: bool
+    status: Literal["CONNECTING", "LIVE", "DELAYED", "RECONNECTING", "RATE_LIMITED", "OFFLINE"]
+    provider: str
+    feed_mode: Literal["polling"]
+    interval: Literal["1min", "5min", "15min"]
+    last_updated: str | None = None
+    last_successful_update: str | None = None
+    message: str | None = None
+    bars_buffered: int = Field(ge=0)
+
+
+class LiveSignalResponse(APIModel):
+    symbol: str
+    timestamp: str
+    price: float
+    provider: str
+    technical: dict[str, Any]
+    regime: dict[str, Any]
+    strategy: dict[str, Any]
+    action: Literal["BUY", "HOLD", "EXIT"]
+    confidence: float = Field(ge=0, le=1)
+    risk: dict[str, Any]
+    reason_codes: list[str]
+
+
+class LiveSnapshotResponse(LiveFeedStateResponse):
+    latest: LiveBar | None = None
+    current_regime: dict[str, Any] | None = None
+    latest_signal: LiveSignalResponse | None = None
+
+
+class LiveStatusResponse(APIModel):
+    enabled: bool
+    provider: str
+    feed_mode: Literal["polling"]
+    poll_seconds: int = Field(ge=1)
+    interval: Literal["1min", "5min", "15min"]
+    symbols: list[LiveFeedStateResponse]
+    execution: Literal["disabled"]
+
+
+class LiveSymbolsResponse(APIModel):
+    items: list[dict[str, str]]
+
+
+class LiveHistoryResponse(APIModel):
+    symbol: str
+    items: list[LiveBar]
+
+
+class LiveSignalsResponse(APIModel):
+    symbol: str
+    items: list[LiveSignalResponse]
+
+
+class LiveFeedEvent(APIModel):
+    timestamp: str
+    event_type: str
+    provider: str
+    feed_status: str
+    summary: str
+    metadata: dict[str, Any]
+
+
+class LiveEventsResponse(APIModel):
+    symbol: str
+    items: list[LiveFeedEvent]
 
 
 class DataFetchRequest(APIModel):

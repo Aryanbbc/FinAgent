@@ -21,6 +21,12 @@ def test_database_url_selects_postgresql_and_translates_portable_sql() -> None:
     )
     assert "BIGSERIAL PRIMARY KEY" in database.prepare_sql("id INTEGER PRIMARY KEY AUTOINCREMENT")
     assert "::jsonb" in database.json_number("results_json", ("metrics", "total_return"))
+    live_statement = database.prepare_sql(
+        "INSERT INTO live_signals (symbol, timestamp) VALUES (?, ?) "
+        "ON CONFLICT(symbol, timestamp) DO UPDATE SET timestamp = EXCLUDED.timestamp"
+    )
+    assert "VALUES (%s, %s)" in live_statement
+    assert "ON CONFLICT(symbol, timestamp)" in live_statement
 
 
 def test_sqlite_registry_retains_durable_ohlcv_rows(tmp_path: Path) -> None:

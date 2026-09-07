@@ -23,6 +23,8 @@ from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.database.models import ExperimentRecord
 from finagent.learning.workflow import run_improvement
+from finagent.live.repository import LiveMarketRepository
+from finagent.live.service import LiveMarketService
 from finagent.runner import load_configuration, run_experiment
 from finagent.validation.workflow import run_research_validation
 from finagent.validation.report import ResearchReportExporter
@@ -47,11 +49,22 @@ class ResearchService:
         self.dataset_registry = DatasetRegistry(self.database)
         self.dataset_manager = DatasetManager(self.dataset_registry, settings.data_cache_path)
         self.logger = configure_logging()
+        # Live monitoring owns isolated tables and never alters historical
+        # datasets, experiments, trades, or portfolio simulation state.
+        self.live_repository = LiveMarketRepository(self.database)
+        self.live_market = LiveMarketService(settings, self.live_repository, logger=self.logger)
 
     def ensure_database_ready(self) -> None:
         """Re-run idempotent schema setup at service startup before requests are accepted."""
         self.database.initialize()
         self.dataset_registry._initialize()
+        self.live_repository.initialize()
+
+    async def start_live_monitoring(self) -> None:
+        await self.live_market.start()
+
+    async def stop_live_monitoring(self) -> None:
+        await self.live_market.stop()
 
     @staticmethod
     def _dataset_summary(dataset: Any) -> dict[str, Any]:
@@ -274,9 +287,39 @@ class ResearchService:
         diagnostics = validate_research_configuration(config)
         return {
             "safe_defaults": {"strategy": config.get("strategy", {}), "backtest": config.get("backtest", {}), "agents": config.get("agents", {}), "regime": config.get("regime", {})},
-            "capabilities": {"local_historical_simulation": True, "live_trading": False, "paper_trading": False, "llm_agents": False, "reinforcement_learning": False},
+            "capabilities": {"local_historical_simulation": True, "live_market_intelligence": self.settings.live_market_enabled, "live_trading": False, "paper_trading": False, "llm_agents": False, "reinforcement_learning": False},
             "warnings": list(diagnostics.warnings),
         }
+
+    def live_status(self) -> dict[str, Any]:
+        return self.live_market.status()
+
+    def live_symbols(self) -> list[dict[str, object]]:
+        return self.live_market.symbols()
+
+    def live_snapshot(self, symbol: str) -> dict[str, Any]:
+        try:
+            return self.live_market.snapshot(symbol)
+        except KeyError as error:
+            raise NotFoundError(str(error)) from error
+
+    def live_history(self, symbol: str) -> list[dict[str, object]]:
+        try:
+            return self.live_market.history(symbol)
+        except KeyError as error:
+            raise NotFoundError(str(error)) from error
+
+    def live_signals(self, symbol: str, limit: int) -> list[dict[str, object]]:
+        try:
+            return self.live_market.signals(symbol, limit)
+        except KeyError as error:
+            raise NotFoundError(str(error)) from error
+
+    def live_events(self, symbol: str, limit: int) -> list[dict[str, object]]:
+        try:
+            return self.live_market.events(symbol, limit)
+        except KeyError as error:
+            raise NotFoundError(str(error)) from error
 
     def health(self) -> dict[str, Any]:
         database = self.database.health_check()
@@ -314,7 +357,7 @@ class ResearchService:
             "data_quality_warnings": warnings, "database_status": health["status"], "database_integrity": health.get("integrity_check"),
             "latest_experiment_at": latest.created_at if latest else None, "latest_validation_at": self.repository.latest_validation_created_at(),
             "last_successful_run": latest.created_at if latest else None, "frontend_version": __version__,
-            "enabled_modules": ["V0.1 backtesting", "V0.2 regimes", "V0.3 agents", "V0.4 critique", "V0.5 controlled improvement", "V0.6 validation", "V0.8 data registry", "V0.9 operations", "V1.0 release suite"],
+            "enabled_modules": ["V0.1 backtesting", "V0.2 regimes", "V0.3 agents", "V0.4 critique", "V0.5 controlled improvement", "V0.6 validation", "V0.8 data registry", "V0.9 operations", "V1.0 release suite", "V1.1 live market intelligence"],
             "demo_mode": demo is not None,
         }
 

@@ -2,6 +2,14 @@
 
 All notable changes to FinAgent are documented here.
 
+## 1.1.0 — Live Market Intelligence Mode
+
+- Added an opt-in, backend-keyed Twelve Data recent-OHLCV polling adapter with bounded exponential backoff and explicit feed states.
+- Added a rolling live OHLCV buffer that reuses the causal feature pipeline, regime detector, and deterministic Technical → Regime → Strategy → Risk chain.
+- Added separate bounded persistence for live research signals, regime observations, and feed events; historical experiments and trades remain unchanged.
+- Added typed `/api/live/*` routes, a monitoring-only `/live` terminal, and a credential-safe live smoke command.
+- Preserved the V1.0 historical release suite and prohibited order creation, paper trading, brokerage connectivity, LLMs, reinforcement learning, and sentiment analysis.
+
 ## 1.0.0 — Final Research Release
 
 - Added a fixed, reproducible two-fixture final evaluation configuration and explicit final benchmark labels.

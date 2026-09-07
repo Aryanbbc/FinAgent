@@ -18,6 +18,16 @@ services:
           property: connectionString
       - key: TWELVE_DATA_API_KEY
         sync: false
+      - key: LIVE_MARKET_ENABLED
+        value: "false"
+      - key: LIVE_DEFAULT_SYMBOL
+        value: AAPL
+      - key: LIVE_INTERVAL
+        value: 1min
+      - key: LIVE_BUFFER_SIZE
+        value: "300"
+      - key: LIVE_POLL_SECONDS
+        value: "60"
       - key: DATA_CACHE_PATH
         value: /tmp/finagent-cache
       - key: REPORTS_PATH

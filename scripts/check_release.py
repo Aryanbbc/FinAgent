@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify FinAgent V1.0.0 release metadata, required artifacts, and tracked-file hygiene."""
+"""Verify the current FinAgent release metadata and retained V1.0 evidence."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 REQUIRED_FILES = (
     "CHANGELOG.md",
     "config/final_experiment.yaml",
@@ -41,7 +41,7 @@ SECRET_MARKERS = (
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check FinAgent V1.0.0 release metadata and tracked-file hygiene")
+    parser = argparse.ArgumentParser(description="Check current FinAgent release metadata and tracked-file hygiene")
     parser.add_argument("--json", action="store_true", dest="as_json")
     arguments = parser.parse_args()
     errors = check_release()
@@ -59,19 +59,19 @@ def check_release() -> list[str]:
     errors: list[str] = []
     pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     if pyproject["project"]["version"] != VERSION:
-        errors.append("pyproject.toml does not declare 1.0.0")
+        errors.append(f"pyproject.toml does not declare {VERSION}")
     package = json.loads((PROJECT_ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
     if package["version"] != VERSION:
-        errors.append("frontend/package.json does not declare 1.0.0")
+        errors.append(f"frontend/package.json does not declare {VERSION}")
     package_lock = json.loads((PROJECT_ROOT / "frontend" / "package-lock.json").read_text(encoding="utf-8"))
     if package_lock["version"] != VERSION or package_lock["packages"][""]["version"] != VERSION:
-        errors.append("frontend/package-lock.json does not declare 1.0.0")
+        errors.append(f"frontend/package-lock.json does not declare {VERSION}")
     init_source = (PROJECT_ROOT / "finagent" / "__init__.py").read_text(encoding="utf-8")
     api_source = (PROJECT_ROOT / "finagent" / "api" / "main.py").read_text(encoding="utf-8")
-    if '__version__ = "1.0.0"' not in init_source:
-        errors.append("finagent package does not declare 1.0.0")
-    if 'version="1.0.0"' not in api_source:
-        errors.append("FastAPI metadata does not declare 1.0.0")
+    if f'__version__ = "{VERSION}"' not in init_source:
+        errors.append(f"finagent package does not declare {VERSION}")
+    if f'version="{VERSION}"' not in api_source:
+        errors.append(f"FastAPI metadata does not declare {VERSION}")
     for relative in REQUIRED_FILES:
         if not (PROJECT_ROOT / relative).is_file():
             errors.append(f"missing required release file: {relative}")

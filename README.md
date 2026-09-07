@@ -1,8 +1,8 @@
 # FinAgent
 
-FinAgent is a reproducible historical-research workspace for testing deterministic technical strategies on OHLCV data. It combines a Python research engine with a FastAPI service and a Next.js interface. It is deliberately not a broker, signal service, live-trading product, or financial-advice tool.
+FinAgent is a reproducible research workspace for deterministic technical strategies on OHLCV data. It combines a Python research engine with a FastAPI service and a Next.js interface. It is deliberately not a broker, live-trading product, or financial-advice tool.
 
-**V1.0.0 — Final Research Release** packages the established V0.1–V0.9 engine with a fixed, reproducible final evaluation suite, exported tables/chart, public-release documentation, and a verified demo. The research logic remains deterministic and unchanged.
+**V1.1.0 — Live Market Intelligence Mode** preserves the V1.0 historical research release and adds a separate, opt-in Twelve Data recent-market monitor. It updates causal features, regimes, and deterministic research signals, but cannot create an order, connect to a broker, or use a real portfolio.
 
 ## What problem it addresses
 
@@ -17,6 +17,7 @@ Historical strategy research is easy to make irreproducible: data can change, co
 - Historical-data adapters, including backend-keyed Twelve Data with Yahoo Finance, Stooq, and local CSV fallback options; normalization, quality checks, deterministic cache paths, immutable revisions, collections, and durable PostgreSQL-backed OHLCV storage for production.
 - FastAPI with typed schemas, pagination/filtering, request IDs, structured errors, local health state, and OpenAPI docs.
 - Next.js research workspace with dashboard, explorer, data quality, charts, reports, errors/empty/loading states, and responsive navigation.
+- Opt-in V1.1 live monitoring with backend-only Twelve Data credentials, bounded polling, a rolling OHLCV buffer, completed-bar signals, rate-limit-aware reconnects, and separate bounded persistence for live regimes, signals, and feed events. It is not trading.
 - Demo seed, environment check, safe SQLite health/backup/export commands, and one-command local startup.
 - Deployment-ready FastAPI binding, explicit CORS origins, Render PostgreSQL Blueprint, Vercel environment wiring, and managed-database documentation.
 - Fixed V1.0 release validation: two bundled fixtures, causal multi-asset walk-forward evaluation, leakage checks, sensitivity, bootstrap intervals, ablation, an explicit benchmark suite, and portable CSV/SVG/Markdown/JSON exports.
@@ -133,6 +134,24 @@ Errors use a stable envelope:
 }
 ```
 
+## Live market intelligence (opt-in, no execution)
+
+V1.1 adds a separate `/live` workspace and typed `/api/live/*` routes. It polls Twelve Data for recent 1-, 5-, or 15-minute OHLCV bars because WebSocket access depends on a provider plan. The server emits a deterministic research signal only after an interval bar is complete; it does not submit or simulate an order.
+
+Keep the key on the backend, then opt in deliberately:
+
+```bash
+export TWELVE_DATA_API_KEY='your-key'
+export LIVE_MARKET_ENABLED=true
+export LIVE_DEFAULT_SYMBOL=AAPL
+export LIVE_SYMBOLS=AAPL
+export LIVE_INTERVAL=1min
+export LIVE_POLL_SECONDS=60
+.venv/bin/python scripts/smoke_live_market.py --symbol AAPL
+```
+
+The smoke command prints provider, feed mode, latest timestamp/price, buffered bars, regime, technical state, strategy action, and risk decision. Without a valid key or available provider it prints `LIVE PROVIDER UNVERIFIED`; it never fabricates market data. See [deployment instructions](docs/DEPLOYMENT.md#live-market-intelligence-on-render) for the production variables and plan-limit guidance.
+
 ## Environment and database maintenance
 
 ```bash
@@ -158,6 +177,11 @@ flowchart TD
   evidence --> validation[Explicit validation and release exports]
   validation --> storage[SQLite local / PostgreSQL production + Markdown/CSV/SVG/JSON]
   storage --> surfaces[FastAPI · Next.js · CLI · Streamlit]
+  live[Twelve Data recent OHLCV, opt-in] --> live_features[Rolling buffer + causal features]
+  live_features --> regimes
+  regimes --> live_agents[Technical → Regime → Strategy → Risk]
+  live_agents --> live_evidence[Separate live signals, regimes, feed events]
+  live_evidence --> surfaces
 ```
 
 Read [architecture notes](docs/ARCHITECTURE.md) and [research methodology](docs/RESEARCH_METHODOLOGY.md) for boundaries and data flow.
@@ -189,10 +213,11 @@ tests/                 deterministic Python tests
 | V0.8 | Historical data providers, quality, cache, revisions, collections |
 | V0.9 | Production polish, local operations, demo mode, UX and API consistency |
 | V1.0.0 | Final deterministic evaluation suite, portable exports, release docs, and verification |
+| V1.1.0 | Opt-in non-executing recent-market monitoring, live research signals, and terminal |
 
 ## Limitations and roadmap
 
-FinAgent works with historical data and deterministic rules. It does not model all market frictions, guarantee future results, provide real-time data, authenticate users, or execute paper/live trades. Third-party historical-provider availability, plan limits, and coverage remain outside this project’s control. SQLite is retained for a single local user; managed PostgreSQL supports the documented Render deployment but does not turn FinAgent into a multi-user trading service.
+FinAgent works with historical data and deterministic rules, plus an opt-in recent-data monitor. It does not model all market frictions, guarantee future results, provide a guaranteed real-time feed, authenticate users, or execute paper/live trades. Third-party provider availability, plan limits, and coverage remain outside this project’s control. SQLite is retained for a single local user; managed PostgreSQL supports the documented Render deployment but does not turn FinAgent into a multi-user trading service.
 
 Future work should remain evidence-driven and preserve reproducibility. It must not silently add LLM trading agents, reinforcement learning, sentiment analysis, brokerage integration, live/paper trading, authentication, or payments without an explicit versioned scope change.
 

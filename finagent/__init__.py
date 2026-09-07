@@ -1,3 +1,3 @@
-"""FinAgent 1.0.0 deterministic historical-research engine and workspace."""
+"""FinAgent 1.1.0 deterministic research engine and live-monitoring workspace."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

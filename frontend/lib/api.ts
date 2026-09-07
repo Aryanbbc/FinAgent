@@ -26,6 +26,12 @@ export type Dataset = DatasetSummary & { cache_path: string; metadata: Record<st
 export type OhlcvRow = { timestamp: string; open: number; high: number; low: number; close: number; volume: number };
 export type OhlcvSeries = { dataset_id: string | null; version_id: string | null; items: OhlcvRow[]; downsampled: boolean };
 export type ActivityEvent = { timestamp: string; event_type: string; source: string; artifact_id: string | null; summary: string; metadata: Record<string, unknown> };
+export type LiveFeedStatus = "CONNECTING" | "LIVE" | "DELAYED" | "RECONNECTING" | "RATE_LIMITED" | "OFFLINE";
+export type LiveBar = OhlcvRow & { symbol: string; provider: string };
+export type LiveFeedState = { symbol: string; enabled: boolean; status: LiveFeedStatus; provider: string; feed_mode: "polling"; interval: "1min" | "5min" | "15min"; last_updated: string | null; last_successful_update: string | null; message: string | null; bars_buffered: number };
+export type LiveSignal = { symbol: string; timestamp: string; price: number; provider: string; technical: Record<string, unknown>; regime: { timestamp: string; regime: string; confidence: number; features: Record<string, number | null> }; strategy: { selected_strategy: string; action: string; confidence: number; requested_position_size: number; reason_codes: string[] }; action: "BUY" | "HOLD" | "EXIT"; confidence: number; risk: { approved: boolean; adjusted_position_size: number; reason_code: string }; reason_codes: string[] };
+export type LiveSnapshot = LiveFeedState & { latest: LiveBar | null; current_regime: LiveSignal["regime"] | null; latest_signal: LiveSignal | null };
+export type LiveEvent = { timestamp: string; event_type: string; provider: string; feed_status: LiveFeedStatus; summary: string; metadata: Record<string, unknown> };
 export type DataFetchInput = { provider: string; symbol: string; start_date: string; end_date: string; interval: "1d"; force_refresh: boolean; source_path?: string; asset_class?: string; missing_data_policy?: "reject" | "forward_fill" | "drop" | "warn_only" };
 export type DataFetchResult = { dataset: DatasetSummary; cache_hit: boolean; requested_provider: string; actual_provider: string; fallback_used: boolean; attempts: { provider: string | null; attempt: number; status: number | null; reason: string; retryable: boolean }[] };
 export type ExperimentRunInput = {
@@ -74,6 +80,12 @@ export const api = {
   fetchData: (input: DataFetchInput) => request<DataFetchResult>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
   validateData: (dataset_id: string, missing_data_policy = "reject") => request<DatasetSummary>("/api/data/validate", { method: "POST", body: JSON.stringify({ dataset_id, missing_data_policy }) }),
   dataCollections: (query = "") => request<{ items: { collection_id: string; name: string; description: string | null; members: { dataset_id: string; version_id: string; symbol: string; adjustment_mode: string }[]; created_at: string | null; warnings: string[] }[]; pagination: Pagination }>(`/api/data/collections${query}`),
+  liveStatus: () => request<{ enabled: boolean; provider: string; feed_mode: "polling"; poll_seconds: number; interval: "1min" | "5min" | "15min"; symbols: LiveFeedState[]; execution: "disabled" }>("/api/live/status"),
+  liveSymbols: () => request<{ items: { symbol: string; provider: string; interval: string }[] }>("/api/live/symbols"),
+  liveSnapshot: (symbol: string) => request<LiveSnapshot>(`/api/live/snapshot/${encodeURIComponent(symbol)}`),
+  liveHistory: (symbol: string) => request<{ symbol: string; items: LiveBar[] }>(`/api/live/history/${encodeURIComponent(symbol)}`),
+  liveSignals: (symbol: string, query = "?limit=50") => request<{ symbol: string; items: LiveSignal[] }>(`/api/live/signals/${encodeURIComponent(symbol)}${query}`),
+  liveEvents: (symbol: string, query = "?limit=100") => request<{ symbol: string; items: LiveEvent[] }>(`/api/live/events/${encodeURIComponent(symbol)}${query}`),
   run: (workflow: "experiments" | "improvements" | "validation", input: string | ExperimentRunInput, dataset_id?: string) => {
     const payload = typeof input === "string" ? { config_path: input, ...(dataset_id ? { dataset_id } : {}) } : input;
     return request(`/api/${workflow}/run`, { method: "POST", body: JSON.stringify(payload) });

@@ -1,6 +1,6 @@
 # Deployment: Render API + PostgreSQL + Vercel frontend
 
-FinAgent remains a deterministic, historical research application. This deployment adds durable managed storage; it does not add live trading, paper trading, brokerage access, authentication, LLMs, reinforcement learning, or sentiment analysis.
+FinAgent remains a deterministic research application. This deployment adds durable managed storage and an optional recent-market monitoring path; it does not add live trading, paper trading, brokerage access, authentication, LLMs, reinforcement learning, or sentiment analysis.
 
 ## Architecture
 
@@ -50,6 +50,13 @@ Set these API environment variables:
 | `FRONTEND_ORIGIN` | exact Vercel production origin, for example `https://fin-agent-iota.vercel.app` |
 | `DATABASE_URL` | Render PostgreSQL **Internal Database URL** (Blueprint: supplied automatically) |
 | `TWELVE_DATA_API_KEY` | Twelve Data API key, set as a Render secret; backend-only, never expose it to Vercel or browser code |
+| `LIVE_MARKET_ENABLED` | `false` by default; set `true` only to opt into V1.1 monitoring |
+| `LIVE_DEFAULT_SYMBOL` | `AAPL` (or one symbol included in `LIVE_SYMBOLS`) |
+| `LIVE_SYMBOLS` | `AAPL` by default; comma-separated configured monitoring symbols |
+| `LIVE_INTERVAL` | `1min`, `5min`, or `15min` (default `1min`) |
+| `LIVE_BUFFER_SIZE` | `300` (bounded between 50 and 5000 bars) |
+| `LIVE_POLL_SECONDS` | `60` by default; do not lower it below the configured 15-second minimum |
+| `LIVE_RETENTION` | `500` recent signals/regimes/events per symbol by default |
 | `DATA_CACHE_PATH` | `/tmp/finagent-cache` |
 | `REPORTS_PATH` | `/tmp/finagent-reports` |
 | `LIVE_TRADING_ENABLED` | `false` |
@@ -131,6 +138,24 @@ From a Render shell (or another backend environment with the same secret and `DA
 ```
 
 It prints requested/actual provider, provider symbol, rows received, date range, dataset ID, and validation status without printing credentials. A Twelve Data account's plan/credits and symbol coverage remain external-provider constraints.
+
+## Live market intelligence on Render
+
+V1.1 live monitoring is separate from historical ingestion and experiments. It makes bounded REST polling requests to Twelve Data because WebSocket availability depends on the account plan. It does not place, simulate, or queue an order.
+
+1. Confirm `TWELVE_DATA_API_KEY` is present only in the Render backend Environment page. Never put it in Vercel, a `NEXT_PUBLIC_*` variable, an API request, or a repository file.
+2. Set `LIVE_MARKET_ENABLED=true`, `LIVE_DEFAULT_SYMBOL=AAPL`, `LIVE_SYMBOLS=AAPL`, `LIVE_INTERVAL=1min`, and `LIVE_POLL_SECONDS=60`, then redeploy.
+3. Open `https://<render-service>.onrender.com/api/live/status`. It should show `enabled: true`, feed mode `polling`, and one configured symbol. Before a valid provider response it may report `CONNECTING` or `OFFLINE`; this is an honest state, not synthetic data.
+4. Run this from a Render shell or backend environment that has the same secret:
+
+   ```bash
+   .venv/bin/python scripts/smoke_live_market.py --symbol AAPL
+   ```
+
+   A success prints the provider, feed mode, symbol, latest timestamp/price, buffered bars, regime, technical state, strategy action, and risk decision. If provider access is unavailable it prints `LIVE PROVIDER UNVERIFIED` and exits non-zero.
+5. Open the Vercel `/live` page. It reads only typed `/api/live/*` responses, refreshes at the backend-configured cadence, and shows the live status, a bounded candlestick/volume chart, completed-bar signal markers, regime strip, agent state, and persisted feed events.
+
+The service stores only bounded research evidence in PostgreSQL: live signals, regime observations, and feed events. It does not store an unbounded raw-tick stream. A 429, 5xx, or temporary network failure changes the status to `RATE_LIMITED` or `RECONNECTING` and schedules bounded exponential backoff. The UI shows that condition and has a retry action; it never bypasses the provider's plan limits.
 
 ## Local development remains SQLite
 
