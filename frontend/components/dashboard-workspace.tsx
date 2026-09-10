@@ -59,7 +59,6 @@ export function DashboardWorkspace({ latest, experiment, market, regimes, trades
           <AgentRow label="Risk" state={decision ? (decision.risk.approved ? "APPROVED" : "REJECTED") : "UNAVAILABLE"} confidence={undefined} detail={decision ? `${percent(decision.risk.adjusted_position_size)} · ${decision.risk.reason_code}` : "No persisted risk decision"} tone={decision?.risk.approved ? "positive" : "negative"}/>
         </section>
         <section className="rail-section research-snapshot"><span className="terminal-overline">Research state</span><div className="snapshot-grid"><Snapshot label="Current regime" value={label(regimes.at(-1)?.regime ?? "unavailable")} /><Snapshot label="Risk decision" value={decision?.risk.approved ? "Approved" : decision ? "Rejected" : "—"} tone={decision?.risk.approved ? "positive" : "negative"}/><Snapshot label="Critic" value={critique ? `${percent(critique.confidence)} confidence` : "No critique"}/><Snapshot label="Costs" value={currency(costs)} /><Snapshot label="Candidate" value={promotion?.status ?? "None"} tone={promotion?.status === "PROMOTED" ? "positive" : "neutral"}/><Snapshot label="Database" value={`${system?.database_backend ?? "—"} · ${system?.database_status ?? "—"}`} /></div></section>
-        <ActivityLog compact onHighlight={setHighlightTimestamp}/>
       </aside>
     </div>
 
@@ -67,6 +66,8 @@ export function DashboardWorkspace({ latest, experiment, market, regimes, trades
       <section className="terminal-panel"><div className="terminal-panel-head"><div><span className="terminal-overline">Portfolio performance</span><h2>Equity vs benchmark</h2></div><span className="terminal-meta">same starting capital</span></div><EquityChart equity={experiment.equity_curve} benchmark={experiment.benchmark_curve}/></section>
       <section className="terminal-panel"><div className="terminal-panel-head"><div><span className="terminal-overline">Risk trace</span><h2>Drawdown</h2></div><span className="terminal-meta">peak-to-trough</span></div><DrawdownChart equity={experiment.equity_curve}/></section>
     </div>
+
+    <ActivityLog compact experimentId={latest.experiment_id} onHighlight={setHighlightTimestamp}/>
 
     <div className="terminal-summary-grid">
       <section className="terminal-panel"><span className="terminal-overline">Experiment summary</span><div className="summary-line"><Link href={`/experiments/${latest.experiment_id}`}>{latest.experiment_id}</Link><span>{latest.strategy} · {latest.asset}</span><span>{experiment.start_date} → {experiment.end_date}</span></div><p className="subtle">Historical simulation only. Chart markers and agent records are persisted research evidence, not executable orders.</p></section>
