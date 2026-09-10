@@ -426,8 +426,8 @@ class DataFetchRequest(APIModel):
     def validate_date_range(self) -> "DataFetchRequest":
         start = _parse_iso_date(self.start_date, "start_date")
         end = _parse_iso_date(self.end_date, "end_date")
-        if end < start:
-            raise ValueError("end_date must be on or after start_date")
+        if end <= start:
+            raise ValueError("end_date must be later than start_date")
         if (end - start).days > MAX_HISTORICAL_RANGE_DAYS:
             raise ValueError(f"historical date range must not exceed {MAX_HISTORICAL_RANGE_DAYS} days")
         return self

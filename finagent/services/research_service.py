@@ -7,6 +7,9 @@ import subprocess  # nosec B404
 import logging
 import json
 from collections.abc import Mapping
+from datetime import date
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -85,11 +88,34 @@ class ResearchService:
     def _clean(value: Any) -> Any:
         if value is None:
             return None
-        if isinstance(value, float) and pd.isna(value):
-            return None
         if isinstance(value, pd.Timestamp):
             return value.isoformat()
-        return value.item() if hasattr(value, "item") else value
+        if isinstance(value, Real) and not isinstance(value, bool):
+            # Starlette deliberately rejects NaN/Infinity JSON.  More
+            # importantly, no unsafe numeric value should be presented as a
+            # legitimate research result when inspecting a legacy invalid
+            # dataset or partially persisted artifact.
+            numeric = float(value)
+            return numeric if isfinite(numeric) else None
+        if pd.isna(value):
+            return None
+        if hasattr(value, "item"):
+            return ResearchService._clean(value.item())
+        return value
+
+    @staticmethod
+    def _validate_date_range(start_date: str | None, end_date: str | None) -> None:
+        """Reject malformed API filters rather than silently lexicographically filtering."""
+        parsed: dict[str, date] = {}
+        for label, value in (("start_date", start_date), ("end_date", end_date)):
+            if value is None:
+                continue
+            try:
+                parsed[label] = date.fromisoformat(str(value))
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"{label} must be an ISO date (YYYY-MM-DD)") from error
+        if parsed.get("start_date") and parsed.get("end_date") and parsed["end_date"] < parsed["start_date"]:
+            raise ValueError("end_date must be on or after start_date")
 
     def _experiment_summary(self, record: ExperimentRecord) -> dict[str, Any]:
         metrics = record.results.get("metrics", {})
@@ -113,6 +139,9 @@ class ResearchService:
         return record
 
     def list_experiments(self, **filters: Any) -> tuple[list[dict[str, Any]], int]:
+        self._validate_date_range(filters.get("start_date"), filters.get("end_date"))
+        if filters.get("asset"):
+            filters["asset"] = str(filters["asset"]).upper()
         records, total = self.repository.list_experiments(**filters)
         return [self._experiment_summary(record) for record in records], total
 
@@ -228,6 +257,7 @@ class ResearchService:
         }
 
     def improvements(self, limit: int, offset: int, **filters: Any) -> tuple[list[dict[str, Any]], int]:
+        self._validate_date_range(filters.get("start_date"), filters.get("end_date"))
         rows, total = self.repository.list_candidate_evaluations(limit, offset, **filters)
         return [
             self._improvement(
@@ -315,6 +345,9 @@ class ResearchService:
         }
 
     def validations(self, limit: int, offset: int, **filters: Any) -> tuple[list[dict[str, Any]], int]:
+        self._validate_date_range(filters.get("start_date"), filters.get("end_date"))
+        if filters.get("asset"):
+            filters["asset"] = str(filters["asset"]).upper()
         records, total = self.repository.list_research_validations(limit, offset, **filters)
         return [self._validation_summary(record) for record in records], total
 
@@ -437,6 +470,9 @@ class ResearchService:
         return self.dataset_manager.providers.describe()
 
     def data_datasets(self, limit: int, offset: int, **filters: Any) -> tuple[list[dict[str, Any]], int]:
+        self._validate_date_range(filters.get("start_date"), filters.get("end_date"))
+        if filters.get("symbol"):
+            filters["symbol"] = str(filters["symbol"]).upper()
         datasets, total = self.dataset_registry.list_datasets(limit, offset, **filters)
         return [self._dataset_summary(dataset) for dataset in datasets], total
 
@@ -502,6 +538,7 @@ class ResearchService:
         limit: int = 1200,
     ) -> dict[str, Any]:
         """Return persisted canonical OHLCV safely bounded for terminal charts."""
+        self._validate_date_range(start_date, end_date)
         dataset = self.dataset_registry.latest(dataset_id)
         frame = (
             self.dataset_registry.load_ohlcv(dataset.version_id)
@@ -526,6 +563,7 @@ class ResearchService:
         limit: int = 1200,
     ) -> dict[str, Any]:
         """Resolve the actual dataset used by a persisted experiment, not a proxy."""
+        self._validate_date_range(start_date, end_date)
         record = self._require_experiment(experiment_id)
         provenance = record.results.get("dataset_provenance") or {}
         experiment_config = record.configuration.get("experiment", {})
@@ -536,8 +574,16 @@ class ResearchService:
         if not path.is_absolute():
             path = self.settings.project_root / path
         path = path.resolve()
-        allowed_data_root = (self.settings.project_root / "data" / "raw").resolve()
-        if not path.is_relative_to(allowed_data_root) or not path.is_file():
+        # Experiments created from a pre-cached, immutable historical source
+        # (for example the isolated AAPL configuration) predate the dataset
+        # registry and therefore retain a path under ``data/cache`` rather
+        # than a dataset ID.  Both roots are project-controlled historical
+        # inputs; do not broaden this to arbitrary filesystem paths.
+        allowed_data_roots = (
+            (self.settings.project_root / "data" / "raw").resolve(),
+            (self.settings.project_root / "data" / "cache").resolve(),
+        )
+        if not any(path.is_relative_to(root) for root in allowed_data_roots) or not path.is_file():
             raise NotFoundError(f"Market data not available for experiment: {experiment_id}")
         return self._bounded_ohlcv(
             CSVDataLoader().load(path),
@@ -641,7 +687,7 @@ class ResearchService:
                 raise InvalidConfigurationError("source_path must reference an existing CSV within data/raw/")
             raw["source_path"] = str(candidate)
         request = MarketDataRequest(
-            symbol=str(raw["symbol"]), start_date=str(raw["start_date"]), end_date=str(raw["end_date"]),
+            symbol=str(raw["symbol"]).upper(), start_date=str(raw["start_date"]), end_date=str(raw["end_date"]),
             interval=str(raw.get("interval", "1d")), force_refresh=bool(raw.get("force_refresh", False)),
             source_path=str(raw["source_path"]) if raw.get("source_path") else None,
             asset_class=str(raw.get("asset_class", "equity")),

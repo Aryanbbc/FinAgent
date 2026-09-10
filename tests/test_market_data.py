@@ -75,6 +75,26 @@ def test_local_csv_provider_and_yahoo_adapter_normalize_without_live_internet() 
     assert list(stooq.fetch_ohlcv(MarketDataRequest("AAPL", "2024-01-01", "2024-01-03")).columns) == ["timestamp", "open", "high", "low", "close", "volume"]
 
 
+def test_local_csv_honours_the_requested_inclusive_range_and_yahoo_uses_inclusive_end() -> None:
+    requested_urls: list[str] = []
+    payload = {"chart": {"result": [{"timestamp": [1704067200, 1704153600], "meta": {}, "indicators": {"quote": [{"open": [10, 11], "high": [11, 12], "low": [9, 10], "close": [10.5, 11.5], "volume": [100, 110]}]}}], "error": None}}
+    YahooFinanceProvider(lambda url: requested_urls.append(url) or json.dumps(payload).encode("utf-8")).fetch_ohlcv(
+        MarketDataRequest("AAPL", "2024-01-01", "2024-01-02")
+    )
+    # Yahoo period2 is exclusive, so it must be the day after the user-visible
+    # end date.  2024-01-03T00:00:00Z is 1704240000.
+    assert "period2=1704240000" in requested_urls[0]
+
+
+def test_local_csv_does_not_return_bars_outside_the_requested_range(tmp_path: Path) -> None:
+    source = tmp_path / "source.csv"
+    _frame().to_csv(source, index=False)
+    result = LocalCSVProvider().fetch_ohlcv(
+        MarketDataRequest("LOCAL", "2024-01-03", "2024-01-04", source_path=str(source))
+    )
+    assert result["timestamp"].tolist() == ["2024-01-03 00:00:00+00:00", "2024-01-04 00:00:00+00:00"]
+
+
 def _twelve_payload(*, status: str = "ok", values: object | None = None, **extra: object) -> dict[str, object]:
     return {
         "status": status,
@@ -238,7 +258,7 @@ def test_twelve_data_cache_hit_avoids_a_second_provider_request(tmp_path: Path) 
     manager = DatasetManager(
         DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((provider,)), sleep=lambda _: None,
     )
-    request = MarketDataRequest("AAPL", "2022-01-01", "2022-01-05")
+    request = MarketDataRequest("AAPL", "2022-01-03", "2022-01-04")
     first = manager.fetch("twelve_data", request)
     cached = manager.fetch("twelve_data", request)
 
@@ -318,7 +338,7 @@ def test_auto_cache_hit_avoids_repeating_provider_requests(tmp_path: Path) -> No
     yahoo = SequencedProvider("yahoo_finance", [_frame()])
     stooq = SequencedProvider("stooq", [_frame(close=11.0)])
     manager = DatasetManager(DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((yahoo, stooq)), sleep=lambda _: None)
-    request = MarketDataRequest("AAPL", "2024-01-01", "2024-01-10")
+    request = MarketDataRequest("AAPL", "2024-01-01", "2024-01-08")
 
     first = manager.fetch("auto", request)
     cached = manager.fetch("auto", request)
@@ -326,6 +346,42 @@ def test_auto_cache_hit_avoids_repeating_provider_requests(tmp_path: Path) -> No
     assert not first.cache_hit and cached.cache_hit
     assert yahoo.calls == 1 and stooq.calls == 0
     assert cached.actual_provider == "yahoo_finance"
+
+
+def test_cache_requires_exact_date_coverage_instead_of_skipping_a_boundary_session(tmp_path: Path) -> None:
+    provider = MutableProvider()
+    manager = DatasetManager(DatasetRegistry(Database(tmp_path / "datasets.db")), tmp_path / "cache", ProviderRegistry((provider,)))
+    manager.fetch("mock_public", MarketDataRequest("MOCK", "2024-01-01", "2024-01-08"))
+    manager.fetch("mock_public", MarketDataRequest("MOCK", "2024-01-01", "2024-01-09"))
+    assert provider.calls == 2
+
+
+def test_invalid_warn_only_data_is_not_persisted_as_a_selectable_dataset(tmp_path: Path) -> None:
+    provider = MutableProvider()
+    provider.frame.loc[0, "close"] = float("inf")
+    registry = DatasetRegistry(Database(tmp_path / "datasets.db"))
+    manager = DatasetManager(registry, tmp_path / "cache", ProviderRegistry((provider,)))
+
+    with pytest.raises(DataValidationError, match="infinite"):
+        manager.fetch("mock_public", MarketDataRequest("MOCK", "2024-01-01", "2024-01-10"), MissingDataPolicy.WARN_ONLY)
+
+    with pytest.raises(LookupError):
+        registry.latest("DATA-MOCK-PUBLIC-MOCK-1D")
+
+
+def test_dataset_revision_and_ohlcv_rows_rollback_together_on_storage_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = DatasetRegistry(Database(tmp_path / "datasets.db"))
+    manager = DatasetManager(registry, tmp_path / "cache", ProviderRegistry((MutableProvider(),)))
+
+    def fail_store(*_: object) -> None:
+        raise RuntimeError("simulated durable-row failure")
+
+    monkeypatch.setattr(registry, "_store_ohlcv", fail_store)
+    with pytest.raises(RuntimeError, match="durable-row"):
+        manager.fetch("mock_public", MarketDataRequest("MOCK", "2024-01-01", "2024-01-08"))
+
+    with pytest.raises(LookupError):
+        registry.latest("DATA-MOCK-PUBLIC-MOCK-1D")
 
 
 def test_auto_and_explicit_provider_keep_distinct_dataset_identities(tmp_path: Path) -> None:
@@ -361,12 +417,12 @@ def test_cache_registry_checksum_revisions_and_collections_are_immutable(tmp_pat
     provider = MutableProvider()
     registry = DatasetRegistry(Database(tmp_path / "datasets.db"))
     manager = DatasetManager(registry, tmp_path / "cache", ProviderRegistry((provider,)))
-    request = MarketDataRequest("MOCK", "2024-01-01", "2024-01-10")
+    request = MarketDataRequest("MOCK", "2024-01-01", "2024-01-08")
     first = manager.fetch("mock_public", request)
     cached = manager.fetch("mock_public", request)
     assert cached.cache_hit and provider.calls == 1 and cached.dataset.version_id == first.dataset.version_id
     provider.frame.loc[0, "close"] = 10.7
-    refreshed = manager.fetch("mock_public", MarketDataRequest("MOCK", "2024-01-01", "2024-01-10", force_refresh=True))
+    refreshed = manager.fetch("mock_public", MarketDataRequest("MOCK", "2024-01-01", "2024-01-08", force_refresh=True))
     assert refreshed.dataset.version_number == 2
     assert len(registry.versions(first.dataset.dataset_id)) == 2
     collection = registry.create_collection("US_TECH_SAMPLE", [first.dataset.dataset_id])

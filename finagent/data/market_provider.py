@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from typing import Callable, NoReturn
@@ -127,13 +127,39 @@ class LocalCSVProvider(MarketDataProvider):
             raise MarketDataProviderError("SOURCE_REQUIRED", "LocalCSVProvider requires source_path.", provider=self.provider_name)
         if not Path(request.source_path).is_file():
             raise MarketDataProviderError("SOURCE_NOT_FOUND", f"Local CSV file not found: {request.source_path}", provider=self.provider_name)
+        try:
+            start = datetime.fromisoformat(request.start_date).replace(tzinfo=UTC)
+            end = datetime.fromisoformat(request.end_date).replace(tzinfo=UTC)
+        except ValueError as error:
+            raise MarketDataProviderError("INVALID_DATE", "start_date and end_date must be ISO dates.", provider=self.provider_name) from error
+        if end <= start:
+            raise MarketDataProviderError("INVALID_DATE_RANGE", "end_date must be later than start_date.", provider=self.provider_name)
 
     def fetch_ohlcv(self, request: MarketDataRequest) -> pd.DataFrame:
         self.validate_request(request)
         # The V0.1 CSVDataLoader remains strict and unchanged for legacy runs.
         # V0.8 intentionally returns raw CSV here so the configured data-quality
         # policy can report/reject/drop/forward-fill before registry persistence.
-        return pd.read_csv(str(request.source_path))
+        frame = pd.read_csv(str(request.source_path))
+        # Local CSV is a first-class historical provider, not an escape hatch
+        # around the requested research interval.  Preserve malformed dates so
+        # the shared quality pipeline can reject them instead of silently
+        # discarding invalid source rows.
+        timestamp_column = next(
+            (
+                column
+                for column in frame.columns
+                if str(column).strip().lower() in {"timestamp", "date", "datetime", "time"}
+            ),
+            None,
+        )
+        if timestamp_column is None:
+            return frame
+        timestamps = pd.to_datetime(frame[timestamp_column], errors="coerce", utc=True)
+        start = pd.Timestamp(request.start_date, tz="UTC")
+        end_exclusive = pd.Timestamp(request.end_date, tz="UTC") + pd.Timedelta(days=1)
+        in_range = (timestamps >= start) & (timestamps < end_exclusive)
+        return frame.loc[in_range | timestamps.isna()].reset_index(drop=True)
 
     def fetch_metadata(self, request: MarketDataRequest) -> AssetMetadata:
         return AssetMetadata(symbol=request.symbol, name=Path(request.source_path or request.symbol).stem, asset_class=request.asset_class, adjustment_mode="unknown")
@@ -164,7 +190,10 @@ class YahooFinanceProvider(MarketDataProvider):
     def fetch_ohlcv(self, request: MarketDataRequest) -> pd.DataFrame:
         self.validate_request(request)
         start = int(datetime.fromisoformat(request.start_date).replace(tzinfo=UTC).timestamp())
-        end = int(datetime.fromisoformat(request.end_date).replace(tzinfo=UTC).timestamp())
+        # Yahoo's period2 is exclusive.  FinAgent's public historical request
+        # range is inclusive at both boundaries, matching Stooq, Twelve Data,
+        # local CSV filtering, and the date labels shown to researchers.
+        end = int((datetime.fromisoformat(request.end_date).replace(tzinfo=UTC) + timedelta(days=1)).timestamp())
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(request.symbol)}?period1={start}&period2={end}&interval=1d"
         payload = self._fetch_json(url)
         chart = payload.get("chart", {})

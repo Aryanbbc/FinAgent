@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, resolveApiBase } from "../lib/api";
 
 test("central API client returns parsed typed payloads", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ status: "ok", version: "1.0.0" }), { status: 200, headers: { "Content-Type": "application/json" } });
   try { assert.equal((await api.health()).status, "ok"); } finally { globalThis.fetch = original; }
+});
+
+test("production requires an explicit public API URL", () => {
+  assert.equal(resolveApiBase(undefined, "production"), null);
+  assert.equal(resolveApiBase(" https://api.example.test/ ", "production"), "https://api.example.test");
+  assert.equal(resolveApiBase(undefined, "development"), "http://127.0.0.1:8000");
 });
 
 test("central API client exposes useful API errors", async () => {

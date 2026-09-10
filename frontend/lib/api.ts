@@ -1,8 +1,15 @@
 /* Centralized, typed client for the local FinAgent FastAPI contract. */
 
-const configuredApiBase = process.env.NEXT_PUBLIC_FINAGENT_API_URL?.replace(/\/$/, "");
-// Local development remains convenient; production must provide the public API URL at build time.
-export const apiBase = configuredApiBase ?? (process.env.NODE_ENV === "production" ? "" : "http://127.0.0.1:8000");
+export function resolveApiBase(configured: string | undefined, environment: string | undefined): string | null {
+  const value = configured?.trim().replace(/\/$/, "");
+  if (value) return value;
+  // A relative production fallback would send API traffic to the Vercel
+  // frontend. Development retains its explicit local convenience default.
+  return environment === "production" ? null : "http://127.0.0.1:8000";
+}
+
+const resolvedApiBase = resolveApiBase(process.env.NEXT_PUBLIC_FINAGENT_API_URL, process.env.NODE_ENV);
+export const apiBase = resolvedApiBase ?? "";
 // Browser bundles never receive the administrator key.  Hosted deployments
 // therefore remain intentionally read-only; administrators use the protected
 // backend API from a server-side/local tool with the header documented in
@@ -53,6 +60,9 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!resolvedApiBase) {
+    throw new ApiError(503, "The deployed frontend is missing NEXT_PUBLIC_FINAGENT_API_URL.", "API_URL_NOT_CONFIGURED");
+  }
   const response = await fetch(`${apiBase}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as Partial<ApiFailure> & { detail?: { message?: string } | string };

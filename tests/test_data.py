@@ -13,6 +13,16 @@ def test_validator_returns_normalized_ohlcv(ohlcv_frame: pd.DataFrame) -> None:
     assert len(result) == len(ohlcv_frame)
 
 
+@pytest.mark.parametrize("defect", [
+    lambda frame: frame.iloc[:1],
+    lambda frame: frame.assign(close=float("inf")),
+    lambda frame: frame.assign(volume=float("-inf")),
+])
+def test_validator_rejects_insufficient_or_non_finite_ohlcv(ohlcv_frame: pd.DataFrame, defect) -> None:
+    with pytest.raises(DataValidationError, match="at least two|finite"):
+        OHLCVValidator().validate(defect(ohlcv_frame.copy()))
+
+
 @pytest.mark.parametrize("defect,message", [
     (lambda frame: frame.drop(columns="volume"), "Missing required columns"),
     (lambda frame: frame.assign(close=[10.5, None, 12.5, 13.5, 14.5, 13.5, 12.5, 11.5]), "Missing"),

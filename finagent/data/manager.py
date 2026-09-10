@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Callable
 
@@ -15,6 +15,7 @@ from finagent.data.market_provider import MarketDataProvider, MarketDataProvider
 from finagent.data.models import DatasetVersion, MarketDataRequest, MissingDataPolicy
 from finagent.data.quality import DataValidationPipeline
 from finagent.data.registry import DatasetRegistry
+from finagent.data.validator import DataValidationError
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,12 @@ class DatasetManager:
                 pass
         raw, provider, attempts, fallback_used = self._fetch_from_candidates(provider_name, candidates, request)
         frame, validation = self.pipeline.prepare(raw, policy)
+        if validation.status.value == "invalid":
+            # ``warn_only`` may be useful to inspect a provider response in an
+            # in-memory assessment, but an invalid series must never become a
+            # selectable immutable research dataset.
+            issues = "; ".join(issue.message for issue in validation.issues if issue.severity == "error")
+            raise DataValidationError(issues or "Historical OHLCV validation failed")
         if frame.empty:
             raise MarketDataProviderError("EMPTY_RESULT", f"No usable rows returned for {request.symbol}.", provider=provider.provider_name)
         checksum = self._checksum(frame)
@@ -103,16 +110,25 @@ class DatasetManager:
             requested_date_range={"start_date": request.start_date, "end_date": request.end_date},
             requested_interval=request.interval,
         )
-        dataset = self.registry.save_version(
+        dataset = self.registry.save_version_with_ohlcv(
             dataset_id=dataset_id, provider=provider.provider_name, symbol=request.symbol, interval=request.interval,
             start_date=str(frame["timestamp"].iloc[0].date()), end_date=str(frame["timestamp"].iloc[-1].date()),
             row_count=len(frame), cache_path=cache_path, checksum=checksum, validation=validation, metadata=metadata,
+            frame=frame,
             dataset_provider=provider_name,
         )
         # The CSV cache remains a local-development convenience.  The immutable
         # canonical rows make production datasets durable across Render restarts.
-        self.registry.store_ohlcv(dataset.version_id, frame)
-        return DatasetFetchResult(dataset, False, provider_name, provider.provider_name, fallback_used, tuple(attempts))
+        actual_provider = dataset.metadata.actual_provider or dataset.provider
+        return DatasetFetchResult(
+            dataset,
+            False,
+            provider_name,
+            actual_provider,
+            provider_name == self.providers.auto_provider
+            and not self.providers.is_primary_auto_provider(actual_provider, request),
+            tuple(attempts),
+        )
 
     def _fetch_from_candidates(
         self,
@@ -201,11 +217,16 @@ class DatasetManager:
 
     @staticmethod
     def _cached_covers(dataset: DatasetVersion, request: MarketDataRequest) -> bool:
-        """Avoid duplicate downloads while allowing a small non-trading-day boundary tolerance."""
+        """Return true only when an immutable revision covers every requested date.
+
+        A former three-day boundary tolerance could reuse a Friday-ending cache
+        for a Monday request (or the reverse at the leading edge), silently
+        omitting a trading session.  Exact coverage favours reproducibility
+        over an unnecessary provider request on a non-trading day.
+        """
         try:
             requested_start, requested_end = date.fromisoformat(request.start_date), date.fromisoformat(request.end_date)
             cached_start, cached_end = date.fromisoformat(dataset.start_date), date.fromisoformat(dataset.end_date)
         except ValueError:
             return False
-        tolerance = timedelta(days=3)
-        return cached_start <= requested_start + tolerance and cached_end >= requested_end - tolerance
+        return cached_start <= requested_start and cached_end >= requested_end

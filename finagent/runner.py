@@ -163,9 +163,18 @@ def run_experiment(
     if dataset_id:
         dataset_registry = DatasetRegistry(database)
         dataset_record = dataset_registry.latest(str(dataset_id))
+        if dataset_record.validation.status.value == "invalid":
+            raise ValueError(
+                f"Dataset {dataset_record.dataset_id} is invalid and cannot be used for a historical experiment"
+            )
         dataset_value = str(dataset_id)
         dataset_path = Path(dataset_record.cache_path)
-        asset = str(experiment_config.get("asset") or dataset_record.symbol)
+        # A registry-selected dataset is the authoritative research source.
+        # Do not retain a template asset such as ``EXAMPLE`` from the YAML
+        # when the controlled API selects AAPL: that would corrupt filtering,
+        # memory retrieval, and experiment provenance despite using AAPL bars.
+        asset = str(dataset_record.symbol).upper()
+        experiment_config["asset"] = asset
         dataset_provenance = {
             "dataset_id": dataset_record.dataset_id,
             "dataset_version": dataset_record.version_id,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import numpy as np
 
 
 REQUIRED_OHLCV_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
@@ -27,6 +28,13 @@ class OHLCVValidator:
         if missing_columns:
             raise DataValidationError(f"Missing required columns: {', '.join(missing_columns)}")
 
+        # A single observation cannot produce a return, a drawdown, or a
+        # meaningful historical simulation.  Reject it at the shared data
+        # boundary rather than persisting a dataset which will fail later in
+        # metrics or research validation.
+        if len(frame) < 2:
+            raise DataValidationError("OHLCV data must contain at least two observations")
+
         normalized = frame.loc[:, list(self.required_columns)].copy()
         try:
             normalized["timestamp"] = pd.to_datetime(normalized["timestamp"], errors="raise", utc=True)
@@ -39,6 +47,10 @@ class OHLCVValidator:
         if normalized.isna().any().any():
             columns = normalized.columns[normalized.isna().any()].tolist()
             raise DataValidationError(f"Missing or non-numeric values in: {', '.join(columns)}")
+
+        numeric_columns = ["open", "high", "low", "close", "volume"]
+        if not np.isfinite(normalized[numeric_columns].to_numpy(dtype=float)).all():
+            raise DataValidationError("OHLCV values must be finite")
 
         if normalized["timestamp"].duplicated().any():
             raise DataValidationError("Duplicate timestamps are not allowed")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from finagent.data.models import (
@@ -61,9 +62,15 @@ class DataValidationPipeline:
 
     def _issues(self, frame: pd.DataFrame) -> list[DataValidationIssue]:
         issues: list[DataValidationIssue] = []
+        if len(frame) < 2:
+            issues.append(DataValidationIssue("INSUFFICIENT_OBSERVATIONS", "error", "OHLCV must contain at least two observations.", len(frame)))
         nulls = int(frame.loc[:, list(REQUIRED_OHLCV_COLUMNS)].isna().sum().sum())
         if nulls:
             issues.append(DataValidationIssue("NAN_VALUES", "error", "OHLCV contains missing or non-numeric values.", nulls))
+        numeric_columns = ["open", "high", "low", "close", "volume"]
+        non_finite = int((~np.isfinite(frame[numeric_columns].to_numpy(dtype=float))).sum())
+        if non_finite:
+            issues.append(DataValidationIssue("NON_FINITE_VALUES", "error", "OHLCV contains infinite values.", non_finite))
         duplicates = int(frame["timestamp"].duplicated().sum())
         if duplicates:
             issues.append(DataValidationIssue("DUPLICATE_TIMESTAMPS", "error", "OHLCV contains duplicate timestamps.", duplicates))

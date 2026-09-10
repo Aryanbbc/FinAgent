@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 
 from finagent.api.main import create_app
 from finagent.api.settings import Settings
+from finagent.services.research_service import ResearchService
 from finagent.runner import run_experiment
 from finagent.validation.workflow import run_research_validation
 
@@ -133,6 +135,25 @@ def test_v08_data_routes_register_local_csv_without_network(client: tuple[TestCl
     assert api.get(f"/api/experiments/{run.json()['experiment_id']}").status_code == 200
 
 
+def test_registry_selected_dataset_is_authoritative_for_experiment_asset(client: tuple[TestClient, str, str]) -> None:
+    """A template's EXAMPLE asset cannot contaminate a selected AAPL dataset."""
+    api, _, _ = client
+    fetched = api.post(
+        "/api/data/fetch",
+        json={
+            "provider": "local_csv", "symbol": "AAPL", "start_date": "2024-01-01", "end_date": "2024-03-01",
+            "interval": "1d", "source_path": "data/raw/example_ohlcv.csv", "force_refresh": False,
+        },
+    )
+    assert fetched.status_code == 200
+    run = api.post(
+        "/api/experiments/run",
+        json={"config_path": "config/experiments.yaml", "dataset_id": fetched.json()["dataset"]["dataset_id"]},
+    )
+    assert run.status_code == 200
+    assert api.get(f"/api/experiments/{run.json()['experiment_id']}").json()["asset"] == "AAPL"
+
+
 def test_data_provider_failures_return_structured_provenance(client: tuple[TestClient, str, str]) -> None:
     api, _, _ = client
     response = api.post(
@@ -148,6 +169,15 @@ def test_data_provider_failures_return_structured_provenance(client: tuple[TestC
     }
 
 
+def test_read_filters_reject_invalid_dates_and_normalize_asset_case(client: tuple[TestClient, str, str]) -> None:
+    api, experiment_id, _ = client
+    assert api.get("/api/data/datasets?start_date=2024-99-01").status_code == 400
+    assert api.get("/api/experiments?start_date=2024-99-01").status_code == 400
+    filtered = api.get("/api/experiments?asset=example")
+    assert filtered.status_code == 200
+    assert experiment_id in {item["experiment_id"] for item in filtered.json()["items"]}
+
+
 def test_terminal_read_endpoints_use_persisted_market_and_activity_data(client: tuple[TestClient, str, str]) -> None:
     """The terminal receives bounded canonical data without recomputing research."""
     api, experiment_id, _ = client
@@ -159,6 +189,42 @@ def test_terminal_read_endpoints_use_persisted_market_and_activity_data(client: 
     assert activity.status_code == 200
     types = {item["event_type"] for item in activity.json()["items"]}
     assert {"EXPERIMENT_COMPLETED", "TRADE_SIMULATED", "SIGNAL_CREATED"} <= types
+
+
+def test_experiment_market_data_allows_project_controlled_cache_sources(tmp_path: Path) -> None:
+    """Legacy direct-path experiments can still drive the terminal chart safely.
+
+    AAPL's isolated reproducible configuration predates registry-backed
+    dataset IDs and intentionally reads an immutable file under data/cache.
+    The API must expose that controlled source, while never accepting an
+    arbitrary file path from a persisted experiment record.
+    """
+    cache_path = tmp_path / "data" / "cache" / "aapl_fixture.csv"
+    cache_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "timestamp": ["2024-01-02T00:00:00+00:00", "2024-01-03T00:00:00+00:00"],
+            "open": [100.0, 101.0], "high": [102.0, 103.0], "low": [99.0, 100.0],
+            "close": [101.0, 102.0], "volume": [1_000.0, 1_200.0],
+        }
+    ).to_csv(cache_path, index=False)
+    settings = Settings(
+        project_root=tmp_path,
+        database_url=f"sqlite:///{tmp_path / 'cache-source.db'}",
+        data_cache_directory=tmp_path / "data" / "cache",
+    )
+    service = ResearchService(settings)
+    service.ensure_database_ready()
+    experiment_id = service.repository.save_experiment(
+        strategy="momentum", asset="AAPL", dataset="data/cache/aapl_fixture.csv",
+        start_date="2024-01-02", end_date="2024-01-03", starting_capital=100_000.0,
+        random_seed=42, configuration={"experiment": {"asset": "AAPL"}}, results={}, metrics={},
+        trades=pd.DataFrame(),
+    )
+
+    market_data = service.experiment_market_data(experiment_id, limit=50)
+
+    assert [row["close"] for row in market_data["items"]] == [101.0, 102.0]
 
 
 def test_controlled_terminal_run_overrides_are_bounded_and_recorded(client: tuple[TestClient, str, str]) -> None:

@@ -7,6 +7,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from finagent.data.models import AssetMetadata, DatasetCollection, DatasetValidationResult, DatasetVersion
@@ -181,6 +182,84 @@ class DatasetRegistry:
         dataset_provider: str | None = None,
     ) -> DatasetVersion:
         """Create a new immutable content revision, or touch the matching cached revision."""
+        with self.database.connect() as connection:
+            return self._save_version(
+                connection,
+                dataset_id=dataset_id,
+                provider=provider,
+                symbol=symbol,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+                row_count=row_count,
+                cache_path=cache_path,
+                checksum=checksum,
+                validation=validation,
+                metadata=metadata,
+                dataset_provider=dataset_provider,
+            )
+
+    def save_version_with_ohlcv(
+        self,
+        *,
+        dataset_id: str,
+        provider: str,
+        symbol: str,
+        interval: str,
+        start_date: str,
+        end_date: str,
+        row_count: int,
+        cache_path: str | Path,
+        checksum: str,
+        validation: DatasetValidationResult,
+        metadata: AssetMetadata,
+        frame: pd.DataFrame,
+        dataset_provider: str | None = None,
+    ) -> DatasetVersion:
+        """Atomically persist a dataset revision and its canonical OHLCV rows.
+
+        Cloud deployments cannot rely on the local CSV cache.  Keeping the
+        revision pointer and its database-backed rows in one transaction means
+        a failed row write cannot leave ``current_version_id`` pointing at an
+        unreadable production dataset.
+        """
+        with self.database.connect() as connection:
+            dataset = self._save_version(
+                connection,
+                dataset_id=dataset_id,
+                provider=provider,
+                symbol=symbol,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+                row_count=row_count,
+                cache_path=cache_path,
+                checksum=checksum,
+                validation=validation,
+                metadata=metadata,
+                dataset_provider=dataset_provider,
+            )
+            self._store_ohlcv(connection, dataset.version_id, frame)
+            return dataset
+
+    def _save_version(
+        self,
+        connection: object,
+        *,
+        dataset_id: str,
+        provider: str,
+        symbol: str,
+        interval: str,
+        start_date: str,
+        end_date: str,
+        row_count: int,
+        cache_path: str | Path,
+        checksum: str,
+        validation: DatasetValidationResult,
+        metadata: AssetMetadata,
+        dataset_provider: str | None = None,
+    ) -> DatasetVersion:
+        """Save a revision using the caller's transaction-bound connection."""
         now = datetime.now(UTC).isoformat()
         path = str(cache_path)
         # Dataset identity may be the requested ``auto`` selector while the
@@ -188,38 +267,41 @@ class DatasetRegistry:
         # Keeping those two notions distinct avoids uniqueness collisions with
         # an explicitly requested Yahoo or Stooq dataset for the same symbol.
         dataset_provider = dataset_provider or provider
-        with self.database.connect() as connection:
-            existing = connection.execute("SELECT * FROM dataset_versions WHERE dataset_id = ? AND checksum = ?", (dataset_id, checksum)).fetchone()
-            if existing is not None:
-                connection.execute(
-                    "UPDATE dataset_versions SET last_refreshed_at = ?, validation_json = ?, metadata_json = ? WHERE version_id = ?",
-                    (now, json.dumps(validation.to_dict(), sort_keys=True), json.dumps(metadata.to_dict(), sort_keys=True), existing["version_id"]),
-                )
-                connection.execute("UPDATE datasets SET current_version_id = ? WHERE dataset_id = ?", (existing["version_id"], dataset_id))
-                refreshed = connection.execute("SELECT * FROM dataset_versions WHERE version_id = ?", (existing["version_id"],)).fetchone()
-                return self._version_from_row(refreshed)
-            number_row = connection.execute("SELECT COALESCE(MAX(version_number), 0) AS number FROM dataset_versions WHERE dataset_id = ?", (dataset_id,)).fetchone()
-            number = int(number_row["number"]) + 1
-            version_id = f"{dataset_id}-V{number:03d}"
+        existing = connection.execute("SELECT * FROM dataset_versions WHERE dataset_id = ? AND checksum = ?", (dataset_id, checksum)).fetchone()
+        if existing is not None:
+            # Content checksums are immutable revision identities.  Refreshing
+            # an identical payload from another provider must not overwrite the
+            # source/provenance of the historical evidence already referenced
+            # by experiments and manifests.
             connection.execute(
-                "INSERT INTO datasets (dataset_id, provider, symbol, interval, created_at) VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(dataset_id) DO NOTHING",
-                (dataset_id, dataset_provider, symbol, interval, now),
+                "UPDATE dataset_versions SET last_refreshed_at = ? WHERE version_id = ?",
+                (now, existing["version_id"]),
             )
-            connection.execute(
-                """INSERT INTO dataset_versions (
-                    version_id, dataset_id, version_number, provider, symbol, asset_class, exchange, interval,
-                    start_date, end_date, row_count, cache_path, checksum, created_at, last_refreshed_at,
-                    validation_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    version_id, dataset_id, number, provider, symbol, metadata.asset_class, metadata.exchange, interval,
-                    start_date, end_date, row_count, path, checksum, now, now,
-                    json.dumps(validation.to_dict(), sort_keys=True), json.dumps(metadata.to_dict(), sort_keys=True),
-                ),
-            )
-            connection.execute("UPDATE datasets SET current_version_id = ? WHERE dataset_id = ?", (version_id, dataset_id))
-            row = connection.execute("SELECT * FROM dataset_versions WHERE version_id = ?", (version_id,)).fetchone()
+            connection.execute("UPDATE datasets SET current_version_id = ? WHERE dataset_id = ?", (existing["version_id"], dataset_id))
+            refreshed = connection.execute("SELECT * FROM dataset_versions WHERE version_id = ?", (existing["version_id"],)).fetchone()
+            return self._version_from_row(refreshed)
+        number_row = connection.execute("SELECT COALESCE(MAX(version_number), 0) AS number FROM dataset_versions WHERE dataset_id = ?", (dataset_id,)).fetchone()
+        number = int(number_row["number"]) + 1
+        version_id = f"{dataset_id}-V{number:03d}"
+        connection.execute(
+            "INSERT INTO datasets (dataset_id, provider, symbol, interval, created_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(dataset_id) DO NOTHING",
+            (dataset_id, dataset_provider, symbol, interval, now),
+        )
+        connection.execute(
+            """INSERT INTO dataset_versions (
+                version_id, dataset_id, version_number, provider, symbol, asset_class, exchange, interval,
+                start_date, end_date, row_count, cache_path, checksum, created_at, last_refreshed_at,
+                validation_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                version_id, dataset_id, number, provider, symbol, metadata.asset_class, metadata.exchange, interval,
+                start_date, end_date, row_count, path, checksum, now, now,
+                json.dumps(validation.to_dict(), sort_keys=True), json.dumps(metadata.to_dict(), sort_keys=True),
+            ),
+        )
+        connection.execute("UPDATE datasets SET current_version_id = ? WHERE dataset_id = ?", (version_id, dataset_id))
+        row = connection.execute("SELECT * FROM dataset_versions WHERE version_id = ?", (version_id,)).fetchone()
         return self._version_from_row(row)
 
     def create_collection(self, name: str, dataset_ids: list[str], description: str | None = None) -> DatasetCollection:
@@ -284,10 +366,19 @@ class DatasetRegistry:
 
     def store_ohlcv(self, version_id: str, frame: pd.DataFrame) -> None:
         """Persist canonical historical rows atomically for cloud-safe dataset retrieval."""
+        with self.database.connect() as connection:
+            self._store_ohlcv(connection, version_id, frame)
+
+    @staticmethod
+    def _store_ohlcv(connection: object, version_id: str, frame: pd.DataFrame) -> None:
+        """Persist canonical rows through an already-open database transaction."""
         required = ("timestamp", "open", "high", "low", "close", "volume")
         missing = [column for column in required if column not in frame.columns]
         if missing:
             raise ValueError(f"Cannot persist OHLCV rows without columns: {', '.join(missing)}")
+        numeric = frame.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
+        if not np.isfinite(numeric).all():
+            raise ValueError("Cannot persist non-finite OHLCV rows")
         rows = [
             (
                 version_id,
@@ -297,13 +388,12 @@ class DatasetRegistry:
             )
             for item in frame.loc[:, list(required)].to_dict(orient="records")
         ]
-        with self.database.connect() as connection:
-            connection.execute("DELETE FROM dataset_ohlcv_rows WHERE version_id = ?", (version_id,))
-            connection.executemany(
-                "INSERT INTO dataset_ohlcv_rows (version_id, timestamp, open, high, low, close, volume) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+        connection.execute("DELETE FROM dataset_ohlcv_rows WHERE version_id = ?", (version_id,))
+        connection.executemany(
+            "INSERT INTO dataset_ohlcv_rows (version_id, timestamp, open, high, low, close, volume) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
 
     def load_ohlcv(self, version_id: str) -> pd.DataFrame:
         """Load database-backed canonical OHLCV rows, preserving chronological order."""
