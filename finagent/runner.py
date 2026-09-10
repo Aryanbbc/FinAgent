@@ -15,7 +15,7 @@ import yaml
 from finagent.agents.decision_system import AgentDecisionSystem
 from finagent.agents.factory import build_agent_decision_system
 from finagent.backtesting.costs import TransactionCostModel
-from finagent.backtesting.engine import BacktestEngine
+from finagent.backtesting.engine import BacktestEngine, ExecutionControlConfig
 from finagent.critique.critic_agent import CriticAgent, CriticAgentConfig
 from finagent.critique.models import CriticAgentInput, TradeStatistics, TransactionCostAssumptions
 from finagent.configuration import validate_research_configuration
@@ -250,6 +250,7 @@ def run_experiment(
         transaction_costs=costs,
         position_fraction=float(backtest_config.get("position_fraction", 1.0)),
         agent_decision_system=agent_decision_system,
+        execution_controls=ExecutionControlConfig.from_mapping(backtest_config.get("execution_controls", {})),
     ).run(featured_data)
     if logger and agents_enabled:
         logger.info("event=AGENT_DECISIONS_GENERATED observations=%s", len(result.agent_decisions))
@@ -257,6 +258,15 @@ def run_experiment(
         logger.info("event=EXPERIMENT_COMPLETED trades=%s", len(result.trades))
 
     metrics = calculate_metrics(result.equity_curve, result.trades, annualization_factor, initial_equity=starting_capital)
+    if logger:
+        logger.info(
+            "event=TRADE_ACTIVITY executions=%s trades_per_year=%s average_holding_bars=%s position_changes=%s turnover=%s",
+            len(result.trades),
+            metrics["trades_per_year"],
+            metrics["average_holding_period_bars"],
+            metrics["position_changes"],
+            metrics["turnover"],
+        )
     benchmark_curve = buy_and_hold_benchmark(market_data, starting_capital, costs)
     benchmark_metrics = calculate_metrics(
         benchmark_curve.rename(columns={"benchmark_equity": "equity"}), None, annualization_factor, initial_equity=starting_capital

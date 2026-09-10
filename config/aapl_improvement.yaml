@@ -9,29 +9,50 @@ learning:
   memory_experiment_id: null
   search:
     mode: neighborhood
-    max_candidates: 4
-    # Only these allowlisted configuration values may be changed by a candidate.
-    boundaries:
-      momentum_window:
-        min: 3
-        max: 12
-        step: 1
-      mean_reversion_window:
-        min: 4
-        max: 16
-        step: 2
-      risk_confidence_threshold:
-        min: 0.05
-        max: 0.50
-        step: 0.05
-      maximum_position_size:
-        min: 0.25
-        max: 1.0
-        step: 0.25
-      maximum_volatility:
-        min: 0.20
-        max: 0.80
-        step: 0.10
+    max_candidates: 5
+    # Each predeclared profile contains only allowlisted settings consumed by
+    # the deterministic strategy, risk, or execution layer.  Combinations are
+    # explicit because holding/cooldown controls and exposure sizing are most
+    # meaningful together; this is not an unbounded parameter search.
+    profiles:
+      - changes:
+          execution_controls:
+            minimum_holding_period_bars: 60
+            reentry_cooldown_bars: 20
+          strategy_weights:
+            moving_average: 0.10
+            momentum: 0.10
+            mean_reversion: 0.10
+      - changes:
+          execution_controls:
+            minimum_holding_period_bars: 30
+            reentry_cooldown_bars: 10
+          strategy_weights:
+            moving_average: 0.05
+            momentum: 0.05
+            mean_reversion: 0.05
+      - changes:
+          execution_controls:
+            minimum_holding_period_bars: 20
+            reentry_cooldown_bars: 10
+          regime_strategy_mappings:
+            bull: moving_average
+            bear: moving_average
+            sideways: moving_average
+            high_volatility: moving_average
+            low_volatility: moving_average
+            stress: moving_average
+      - changes:
+          execution_controls:
+            minimum_holding_period_bars: 20
+            reentry_cooldown_bars: 10
+          momentum_entry_threshold: 0.02
+          momentum_exit_threshold: -0.04
+      - changes:
+          execution_controls:
+            minimum_holding_period_bars: 20
+            reentry_cooldown_bars: 10
+          risk_confidence_threshold: 0.50
   walk_forward:
     train_size: 504
     test_size: 126

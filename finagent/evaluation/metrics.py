@@ -62,6 +62,7 @@ def calculate_metrics(
     trade_notional = 0.0
     if trades is not None and not trades.empty:
         trade_notional = float((trades["price"].astype(float) * trades["quantity"].astype(float)).sum())
+    activity = _trade_activity(trades, equity_curve, annualization_factor)
 
     return {
         "total_return": float(total_return),
@@ -76,4 +77,45 @@ def calculate_metrics(
         "average_trade_return": float(closed_returns.mean()) if not closed_returns.empty else None,
         "profit_factor": _ratio(float(gains), float(losses)) if losses > 0 else None,
         "turnover": float(trade_notional / evaluation_equity.mean()) if evaluation_equity.mean() else None,
+        "position_changes": activity["position_changes"],
+        "trades_per_year": activity["trades_per_year"],
+        "average_holding_period_bars": activity["average_holding_period_bars"],
+    }
+
+
+def _trade_activity(
+    trades: pd.DataFrame | None,
+    equity_curve: pd.DataFrame,
+    annualization_factor: int,
+) -> dict[str, float | int | None]:
+    """Return causal activity diagnostics without changing the legacy turnover unit."""
+    if trades is None or trades.empty:
+        return {"position_changes": 0, "trades_per_year": 0.0, "average_holding_period_bars": None}
+    ordered = trades.copy()
+    periods = max(len(equity_curve) - 1, 0)
+    closed_trades = int((ordered["side"] == "SELL").sum())
+    if "timestamp" not in ordered or "timestamp" not in equity_curve:
+        return {
+            "position_changes": int(len(ordered)),
+            "trades_per_year": float(closed_trades / (periods / annualization_factor)) if periods else None,
+            "average_holding_period_bars": None,
+        }
+    ordered["timestamp"] = pd.to_datetime(ordered["timestamp"], utc=True)
+    ordered = ordered.sort_values("timestamp", kind="stable")
+    curve_timestamps = pd.DatetimeIndex(pd.to_datetime(equity_curve["timestamp"], utc=True))
+    timestamp_positions = {timestamp: index for index, timestamp in enumerate(curve_timestamps)}
+    entry_bar: int | None = None
+    holding_periods: list[int] = []
+    for trade in ordered.itertuples(index=False):
+        timestamp = pd.Timestamp(trade.timestamp)
+        bar = timestamp_positions.get(timestamp)
+        if trade.side == "BUY" and entry_bar is None and bar is not None:
+            entry_bar = bar
+        elif trade.side == "SELL" and entry_bar is not None and bar is not None:
+            holding_periods.append(max(0, bar - entry_bar))
+            entry_bar = None
+    return {
+        "position_changes": int(len(ordered)),
+        "trades_per_year": float(closed_trades / (periods / annualization_factor)) if periods else 0.0,
+        "average_holding_period_bars": float(np.mean(holding_periods)) if holding_periods else None,
     }

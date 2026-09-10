@@ -154,6 +154,32 @@ def test_candidate_generation_interleaves_levers_and_removes_duplicate_configura
     assert len(fingerprints) == 1
 
 
+def test_turnover_profiles_apply_only_allowlisted_consumed_changes_and_deduplicate() -> None:
+    configuration = _configuration()
+    profile = {
+        "changes": {
+            "execution_controls": {"minimum_holding_period_bars": 20, "reentry_cooldown_bars": 10},
+            "strategy_weights": {"momentum": 0.1},
+        }
+    }
+    agent_input = LearningAgentInput(
+        current_version_id="FinAgent-A0001",
+        current_configuration=configuration,
+        memory={"experiment_id": "EXP-000001"},
+        critique={"reason_codes": [CandidateReasonCode.EXCESSIVE_TURNOVER.value]},
+        boundaries={},
+        max_candidates=5,
+        candidate_profiles=(profile, copy.deepcopy(profile)),
+    )
+
+    candidates = LearningAgent().propose(agent_input)
+
+    assert len(candidates) == 1
+    assert [change.parameter for change in candidates[0].parameter_changes] == ["execution_controls", "strategy_weights"]
+    assert candidates[0].configuration["backtest"]["execution_controls"] == profile["changes"]["execution_controls"]
+    assert candidates[0].configuration["agents"]["strategy"]["strategy_weights"] == {"momentum": 0.1}
+
+
 def test_candidate_constraints_reject_invalid_strategy_and_risk_configuration() -> None:
     invalid = _configuration()
     invalid["agents"]["strategy"]["available_strategies"]["moving_average"]["fast_window"] = 8

@@ -10,7 +10,7 @@ import pandas as pd
 
 from finagent.agents.factory import build_agent_decision_system
 from finagent.backtesting.costs import TransactionCostModel
-from finagent.backtesting.engine import BacktestEngine, BacktestResult
+from finagent.backtesting.engine import BacktestEngine, BacktestResult, ExecutionControlConfig
 from finagent.features.pipeline import FeaturePipeline
 from finagent.learning.models import (
     CandidateProposal,
@@ -159,6 +159,7 @@ def _simulate(market_data: pd.DataFrame, configuration: Mapping[str, Any]) -> Ba
         transaction_costs=TransactionCostModel(**backtest.get("transaction_costs", {})),
         position_fraction=float(backtest.get("position_fraction", 1.0)),
         agent_decision_system=build_agent_decision_system(configuration, detector) if agents_enabled else None,
+        execution_controls=ExecutionControlConfig.from_mapping(backtest.get("execution_controls", {})),
     ).run(featured_data)
 
 
@@ -207,4 +208,20 @@ def _aggregate(metrics: list[ValidationMetrics]) -> ValidationMetrics:
         turnover=sum(value for value in turnovers if value is not None) if all(value is not None for value in turnovers) else None,
         transaction_cost=sum(item.transaction_cost for item in metrics),
         number_of_trades=sum(item.number_of_trades for item in metrics),
+        position_changes=sum(item.position_changes for item in metrics),
+        trades_per_year=(
+            sum(value for value in (item.trades_per_year for item in metrics) if value is not None) / len(metrics)
+            if all(item.trades_per_year is not None for item in metrics)
+            else None
+        ),
+        average_holding_period_bars=(
+            sum(
+                (item.average_holding_period_bars or 0.0) * item.number_of_trades
+                for item in metrics
+                if item.average_holding_period_bars is not None
+            )
+            / sum(item.number_of_trades for item in metrics if item.average_holding_period_bars is not None)
+            if any(item.average_holding_period_bars is not None and item.number_of_trades for item in metrics)
+            else None
+        ),
     )

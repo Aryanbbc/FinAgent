@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from finagent.backtesting.costs import TransactionCostModel
-from finagent.backtesting.engine import BacktestEngine
+from finagent.backtesting.engine import BacktestEngine, ExecutionControlConfig
 from finagent.strategies.base import Signal, Strategy
 
 
@@ -51,3 +51,23 @@ def test_backtester_only_exposes_history_through_current_bar() -> None:
     strategy = ScriptedStrategy([Signal.HOLD] * 4)
     BacktestEngine(strategy, 100.0).run(market)
     assert strategy.observed_lengths == [1, 2, 3, 4]
+
+
+def test_execution_controls_causally_limit_holding_and_reentry_frequency() -> None:
+    market = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=6, freq="D", tz="UTC"),
+            "close": [10.0] * 6,
+        }
+    )
+    strategy = ScriptedStrategy([Signal.LONG, Signal.EXIT, Signal.LONG, Signal.EXIT, Signal.LONG, Signal.LONG])
+    result = BacktestEngine(
+        strategy,
+        100.0,
+        execution_controls=ExecutionControlConfig(minimum_holding_period_bars=2, reentry_cooldown_bars=2),
+    ).run(market)
+
+    # The first exit is held through; after the valid exit, the next entry is
+    # delayed until two observed bars have elapsed.  No future bars are read.
+    assert result.trades["side"].tolist() == ["BUY", "SELL", "BUY"]
+    assert pd.to_datetime(result.trades["timestamp"], utc=True).dt.day.tolist() == [1, 4, 6]

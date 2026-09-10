@@ -96,7 +96,17 @@ def _duplicate_outcome(
     tolerance: float = 1e-9,
 ) -> bool:
     """Detect semantically different candidates that produce the same OOS evidence."""
-    fields = ("total_return", "sharpe_ratio", "maximum_drawdown", "turnover", "transaction_cost", "number_of_trades")
+    fields = (
+        "total_return",
+        "sharpe_ratio",
+        "maximum_drawdown",
+        "turnover",
+        "transaction_cost",
+        "number_of_trades",
+        "position_changes",
+        "trades_per_year",
+        "average_holding_period_bars",
+    )
 
     def close(left: Any, right: Any) -> bool:
         if left is None or right is None:
@@ -193,6 +203,9 @@ def run_improvement(
         )
 
     search = dict(learning.get("search", {}))
+    raw_profiles = search.get("profiles", [])
+    if not isinstance(raw_profiles, list) or any(not isinstance(profile, dict) for profile in raw_profiles):
+        raise ValueError("learning.search.profiles must be a list of mapping profiles")
     candidates = LearningAgent(logger).propose(
         agent_input=LearningAgentInput(
             current_version_id=current_version.version_id,
@@ -202,6 +215,7 @@ def run_improvement(
             boundaries=dict(search.get("boundaries", {})),
             search_mode=str(search.get("mode", "neighborhood")),
             max_candidates=int(search.get("max_candidates", 5)),
+            candidate_profiles=tuple(dict(profile) for profile in raw_profiles),
         ),
         candidate_start=repository.next_candidate_number(),
     )
@@ -254,7 +268,8 @@ def run_improvement(
             )
             logger.info(
                 "event=WALK_FORWARD_EVALUATED candidate_id=%s changes=%s windows=%s oos_return=%s "
-                "oos_sharpe=%s oos_drawdown=%s trades=%s turnover=%s pass_rate=%s status=%s reasons=%s",
+                "oos_sharpe=%s oos_drawdown=%s trades=%s trades_per_year=%s average_holding_bars=%s "
+                "position_changes=%s turnover=%s pass_rate=%s status=%s reasons=%s",
                 candidate.candidate_id,
                 changes,
                 len(evaluation.windows),
@@ -262,6 +277,9 @@ def run_improvement(
                 decision.candidate_metrics.sharpe_ratio,
                 decision.candidate_metrics.maximum_drawdown,
                 decision.candidate_metrics.number_of_trades,
+                decision.candidate_metrics.trades_per_year,
+                decision.candidate_metrics.average_holding_period_bars,
+                decision.candidate_metrics.position_changes,
                 decision.candidate_metrics.turnover,
                 decision.window_pass_rate,
                 decision.status.value,

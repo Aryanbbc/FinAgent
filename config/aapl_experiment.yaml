@@ -49,6 +49,11 @@ strategy:
 backtest:
   annualization_factor: 252
   position_fraction: 1.0
+  # Defaults preserve the historical V0.1--V1.1 execution path.  V1.0
+  # controlled-learning candidates may set bounded causal controls here.
+  execution_controls:
+    minimum_holding_period_bars: 0
+    reentry_cooldown_bars: 0
   transaction_costs:
     percentage_fee: 0.001
     fixed_fee: 1.0

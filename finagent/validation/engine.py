@@ -10,7 +10,7 @@ import pandas as pd
 
 from finagent.agents.factory import build_agent_decision_system
 from finagent.backtesting.costs import TransactionCostModel
-from finagent.backtesting.engine import BacktestEngine, BacktestResult
+from finagent.backtesting.engine import BacktestEngine, BacktestResult, ExecutionControlConfig
 from finagent.evaluation.benchmark import buy_and_hold_benchmark
 from finagent.evaluation.metrics import calculate_metrics
 from finagent.features.pipeline import FeaturePipeline
@@ -61,6 +61,7 @@ def simulate_configuration(market_data: pd.DataFrame, configuration: dict[str, A
         transaction_costs=costs,
         position_fraction=float(backtest_configuration.get("position_fraction", 1.0)),
         agent_decision_system=build_agent_decision_system(configuration, detector) if agents_enabled else None,
+        execution_controls=ExecutionControlConfig.from_mapping(backtest_configuration.get("execution_controls", {})),
     ).run(featured_data)
     metrics = calculate_metrics(backtest.equity_curve, backtest.trades, annualization, initial_equity=starting_capital)
     benchmark_curve = buy_and_hold_benchmark(market_data, starting_capital, costs)

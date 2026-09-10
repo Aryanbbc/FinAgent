@@ -104,6 +104,7 @@ class LearningAgentInput:
     boundaries: dict[str, Any]
     search_mode: str = "neighborhood"
     max_candidates: int = 5
+    candidate_profiles: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,9 @@ class ValidationMetrics:
     turnover: float | None
     transaction_cost: float
     number_of_trades: int
+    position_changes: int = 0
+    trades_per_year: float | None = None
+    average_holding_period_bars: float | None = None
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any], transaction_cost: float) -> "ValidationMetrics":
@@ -126,6 +130,9 @@ class ValidationMetrics:
             turnover=_float_or_none(data.get("turnover")),
             transaction_cost=float(transaction_cost),
             number_of_trades=int(data.get("number_of_trades") or 0),
+            position_changes=int(data.get("position_changes") or 0),
+            trades_per_year=_float_or_none(data.get("trades_per_year")),
+            average_holding_period_bars=_float_or_none(data.get("average_holding_period_bars")),
         )
 
     def to_dict(self) -> dict[str, float | int | None]:
@@ -136,6 +143,9 @@ class ValidationMetrics:
             "turnover": self.turnover,
             "transaction_cost": self.transaction_cost,
             "number_of_trades": self.number_of_trades,
+            "position_changes": self.position_changes,
+            "trades_per_year": self.trades_per_year,
+            "average_holding_period_bars": self.average_holding_period_bars,
         }
 
     @classmethod
@@ -147,6 +157,9 @@ class ValidationMetrics:
             turnover=_float_or_none(data.get("turnover")),
             transaction_cost=float(data.get("transaction_cost") or 0.0),
             number_of_trades=int(data.get("number_of_trades") or 0),
+            position_changes=int(data.get("position_changes") or 0),
+            trades_per_year=_float_or_none(data.get("trades_per_year")),
+            average_holding_period_bars=_float_or_none(data.get("average_holding_period_bars")),
         )
 
 

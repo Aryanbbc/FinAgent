@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pandas as pd
@@ -24,6 +25,34 @@ class BacktestResult:
     agent_decisions: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class ExecutionControlConfig:
+    """Causal trade-frequency controls applied after an existing strategy signal.
+
+    Both values are expressed in observed bars.  The zero defaults preserve
+    every pre-existing V0.1--V1.1 backtest exactly.
+    """
+
+    minimum_holding_period_bars: int = 0
+    reentry_cooldown_bars: int = 0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("minimum_holding_period_bars", self.minimum_holding_period_bars),
+            ("reentry_cooldown_bars", self.reentry_cooldown_bars),
+        ):
+            if isinstance(value, bool) or int(value) != value or not 0 <= int(value) <= 252:
+                raise ValueError(f"{name} must be an integer between 0 and 252")
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, object] | None) -> "ExecutionControlConfig":
+        raw = dict(values or {})
+        return cls(
+            minimum_holding_period_bars=int(raw.get("minimum_holding_period_bars", 0)),
+            reentry_cooldown_bars=int(raw.get("reentry_cooldown_bars", 0)),
+        )
+
+
 class BacktestEngine:
     """Runs a strategy one bar at a time using close-price simulated execution."""
 
@@ -34,6 +63,7 @@ class BacktestEngine:
         transaction_costs: TransactionCostModel | None = None,
         position_fraction: float = 1.0,
         agent_decision_system: AgentDecisionSystem | None = None,
+        execution_controls: ExecutionControlConfig | None = None,
     ) -> None:
         if not 0 < position_fraction <= 1:
             raise ValueError("position_fraction must be between 0 and 1")
@@ -43,6 +73,7 @@ class BacktestEngine:
         self.costs = transaction_costs or TransactionCostModel()
         self.execution = ExecutionSimulator(self.costs)
         self.agent_decision_system = agent_decision_system
+        self.execution_controls = execution_controls or ExecutionControlConfig()
 
     def run(self, market_data: pd.DataFrame) -> BacktestResult:
         """Backtest chronologically; strategy input is restricted to each bar's history."""
@@ -56,6 +87,8 @@ class BacktestEngine:
         curve_rows: list[dict[str, object]] = []
         agent_decision_records: list[dict[str, object]] = []
         peak_equity = self.starting_capital
+        entry_bar: int | None = None
+        last_exit_bar: int | None = None
 
         for position, (_, row) in enumerate(market_data.iterrows()):
             timestamp = pd.Timestamp(row["timestamp"])
@@ -86,15 +119,26 @@ class BacktestEngine:
                 if signal == Signal.LONG:
                     execution_fraction = min(self.position_fraction, decision.risk.adjusted_position_size)
 
-            if signal == Signal.LONG and portfolio.holdings == 0 and execution_fraction > 0:
+            can_enter = (
+                last_exit_bar is None
+                or position - last_exit_bar >= self.execution_controls.reentry_cooldown_bars
+            )
+            can_exit = (
+                entry_bar is None
+                or position - entry_bar >= self.execution_controls.minimum_holding_period_bars
+            )
+            if signal == Signal.LONG and portfolio.holdings == 0 and execution_fraction > 0 and can_enter:
                 quantity = self.execution.maximum_buy_quantity(portfolio.cash or 0.0, price, execution_fraction)
                 if quantity:
                     cost = self.costs.calculate(price * quantity)
                     trades.append(portfolio.buy(timestamp, price, quantity, cost))
-            elif signal == Signal.EXIT and portfolio.holdings > 0:
+                    entry_bar = position
+            elif signal == Signal.EXIT and portfolio.holdings > 0 and can_exit:
                 quantity = portfolio.holdings
                 cost = self.costs.calculate(price * quantity)
                 trades.append(portfolio.sell(timestamp, price, quantity, cost))
+                entry_bar = None
+                last_exit_bar = position
 
             portfolio.mark_to_market(price)
             peak_equity = max(peak_equity, portfolio.value(price))

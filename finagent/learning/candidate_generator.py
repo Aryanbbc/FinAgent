@@ -23,6 +23,9 @@ APPROVED_PARAMETERS = frozenset(
         "momentum_window",
         "mean_reversion_window",
         "mean_reversion_threshold",
+        "momentum_entry_threshold",
+        "momentum_exit_threshold",
+        "execution_controls",
         "strategy_weights",
         "regime_strategy_mappings",
         "risk_confidence_threshold",
@@ -100,6 +103,61 @@ class CandidateGenerator:
             proposals.append(proposal)
         return tuple(proposals)
 
+    def generate_profiles(
+        self,
+        agent_input: LearningAgentInput,
+        profiles: Sequence[Mapping[str, Any]],
+        candidate_start: int = 1,
+    ) -> tuple[CandidateProposal, ...]:
+        """Generate predeclared multi-lever candidates without an open-ended search.
+
+        A profile contains only an explicit ``changes`` mapping of allowlisted
+        settings.  It lets research define a small, auditable combination such
+        as a holding/cooldown policy plus position weights, where the levers are
+        meaningful only together.  The resulting configuration contains the
+        actual consumed settings, never a profile-only runtime key.
+        """
+        base_reasons = [CandidateReasonCode.MEMORY_RETRIEVED]
+        if agent_input.critique:
+            base_reasons.append(CandidateReasonCode.CRITIC_RECOMMENDATION)
+        base_reasons.append(CandidateReasonCode.NEIGHBORHOOD_SEARCH)
+        proposals: list[CandidateProposal] = []
+        fingerprints: set[str] = set()
+        for profile in profiles:
+            if len(proposals) >= self.max_candidates:
+                break
+            changes_mapping = profile.get("changes")
+            if not isinstance(changes_mapping, Mapping) or not changes_mapping:
+                raise ConfigurationConstraintError("Candidate profiles require a non-empty changes mapping")
+            unknown = set(changes_mapping) - APPROVED_PARAMETERS
+            if unknown:
+                raise ConfigurationConstraintError(f"Unapproved candidate parameters: {sorted(unknown)}")
+            configuration = copy.deepcopy(agent_input.current_configuration)
+            changes: list[ParameterChange] = []
+            for parameter, value in changes_mapping.items():
+                previous = self._get_parameter(configuration, parameter)
+                if previous == value:
+                    continue
+                self._set_parameter(configuration, parameter, value)
+                changes.append(ParameterChange(parameter, previous, value))
+            if not changes:
+                continue
+            self.validate_configuration(configuration)
+            fingerprint = json.dumps(configuration, sort_keys=True, separators=(",", ":"), default=str)
+            if fingerprint in fingerprints:
+                continue
+            fingerprints.add(fingerprint)
+            proposals.append(
+                CandidateProposal(
+                    candidate_id=f"CAND-{candidate_start + len(proposals):04d}",
+                    parent_version_id=agent_input.current_version_id,
+                    configuration=configuration,
+                    parameter_changes=tuple(changes),
+                    reason_codes=tuple(base_reasons),
+                )
+            )
+        return tuple(proposals)
+
     @staticmethod
     def _neighborhood_combinations(
         parameter_values: Sequence[tuple[str, list[Any]]],
@@ -140,7 +198,7 @@ class CandidateGenerator:
         selected_parameters: Sequence[str],
     ) -> list[tuple[str, list[Any]]]:
         values: list[tuple[str, list[Any]]] = []
-        for parameter in sorted(selected_parameters):
+        for parameter in dict.fromkeys(selected_parameters):
             if parameter not in boundaries:
                 continue
             current = self._get_parameter(configuration, parameter)
@@ -175,6 +233,7 @@ class CandidateGenerator:
         strategy = agents.get("strategy", {})
         risk = agents.get("risk", {})
         direct = configuration.get("strategy", {})
+        backtest = configuration.get("backtest", {})
         if parameter == "moving_average_fast_window":
             return self._agent_strategy(configuration, "moving_average").get(
                 "fast_window", direct.get("parameters", {}).get("fast_window")
@@ -195,6 +254,16 @@ class CandidateGenerator:
             return self._agent_strategy(configuration, "mean_reversion").get(
                 "entry_zscore", direct.get("parameters", {}).get("entry_zscore")
             )
+        if parameter == "momentum_entry_threshold":
+            return self._agent_strategy(configuration, "momentum").get(
+                "entry_threshold", direct.get("parameters", {}).get("entry_threshold")
+            )
+        if parameter == "momentum_exit_threshold":
+            return self._agent_strategy(configuration, "momentum").get(
+                "exit_threshold", direct.get("parameters", {}).get("exit_threshold")
+            )
+        if parameter == "execution_controls":
+            return copy.deepcopy(backtest.get("execution_controls", {}))
         if parameter == "strategy_weights":
             return copy.deepcopy(strategy.get("strategy_weights", {}))
         if parameter == "regime_strategy_mappings":
@@ -214,6 +283,7 @@ class CandidateGenerator:
         risk = agents.setdefault("risk", {})
         direct = configuration.setdefault("strategy", {})
         direct_parameters = direct.setdefault("parameters", {})
+        backtest = configuration.setdefault("backtest", {})
         if parameter == "moving_average_fast_window":
             available.setdefault("moving_average", {})["fast_window"] = int(value)
             if direct.get("name") == "moving_average":
@@ -234,6 +304,18 @@ class CandidateGenerator:
             available.setdefault("mean_reversion", {})["entry_zscore"] = float(value)
             if direct.get("name") == "mean_reversion":
                 direct_parameters["entry_zscore"] = float(value)
+        elif parameter == "momentum_entry_threshold":
+            available.setdefault("momentum", {})["entry_threshold"] = float(value)
+            if direct.get("name") == "momentum":
+                direct_parameters["entry_threshold"] = float(value)
+        elif parameter == "momentum_exit_threshold":
+            available.setdefault("momentum", {})["exit_threshold"] = float(value)
+            if direct.get("name") == "momentum":
+                direct_parameters["exit_threshold"] = float(value)
+        elif parameter == "execution_controls":
+            if not isinstance(value, Mapping):
+                raise ConfigurationConstraintError("execution_controls must be a mapping")
+            backtest["execution_controls"] = dict(value)
         elif parameter == "strategy_weights":
             strategy["strategy_weights"] = dict(value)
         elif parameter == "regime_strategy_mappings":
@@ -257,8 +339,11 @@ class CandidateGenerator:
             if fast is None or slow is None or int(fast) < 1 or int(slow) <= int(fast):
                 raise ConfigurationConstraintError("moving_average fast_window must be positive and lower than slow_window")
         momentum = available.get("momentum", {})
-        if momentum and int(momentum.get("lookback_window", 0)) < 1:
-            raise ConfigurationConstraintError("momentum lookback_window must be positive")
+        if momentum:
+            if int(momentum.get("lookback_window", 0)) < 1:
+                raise ConfigurationConstraintError("momentum lookback_window must be positive")
+            if float(momentum.get("exit_threshold", 0)) > float(momentum.get("entry_threshold", 0)):
+                raise ConfigurationConstraintError("momentum exit_threshold cannot exceed entry_threshold")
         mean_reversion = available.get("mean_reversion", {})
         if mean_reversion:
             if int(mean_reversion.get("lookback_window", 0)) < 2:
@@ -280,3 +365,10 @@ class CandidateGenerator:
                 raise ConfigurationConstraintError("maximum position size must be in (0, 1]")
             if float(risk.get("max_volatility", 0)) <= 0:
                 raise ConfigurationConstraintError("maximum volatility must be positive")
+        controls = configuration.get("backtest", {}).get("execution_controls", {})
+        if not isinstance(controls, Mapping):
+            raise ConfigurationConstraintError("execution_controls must be a mapping")
+        for name in ("minimum_holding_period_bars", "reentry_cooldown_bars"):
+            value = controls.get(name, 0)
+            if isinstance(value, bool) or int(value) != value or not 0 <= int(value) <= 252:
+                raise ConfigurationConstraintError(f"{name} must be an integer between 0 and 252")

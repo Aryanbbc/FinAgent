@@ -28,3 +28,28 @@ def test_metrics_total_return_drawdown_and_trade_statistics() -> None:
     returns = curve["equity"].pct_change().dropna()
     expected_sharpe = returns.mean() / returns.std(ddof=1) * math.sqrt(252)
     assert math.isclose(metrics["sharpe_ratio"], expected_sharpe)
+
+
+def test_metrics_include_trade_frequency_diagnostics_when_timestamps_are_available() -> None:
+    curve = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC"),
+            "equity": [100.0, 100.0, 105.0, 105.0, 110.0],
+        }
+    )
+    trades = pd.DataFrame(
+        {
+            "timestamp": [curve["timestamp"].iloc[0], curve["timestamp"].iloc[2]],
+            "side": ["BUY", "SELL"],
+            "price": [100.0, 105.0],
+            "quantity": [1.0, 1.0],
+            "trade_return": [None, 0.05],
+            "realized_pnl": [None, 5.0],
+        }
+    )
+
+    metrics = calculate_metrics(curve, trades, annualization_factor=2)
+
+    assert metrics["position_changes"] == 2
+    assert metrics["trades_per_year"] == 0.5
+    assert metrics["average_holding_period_bars"] == 2.0
