@@ -165,6 +165,57 @@ def test_registry_selected_dataset_is_authoritative_for_experiment_asset(client:
     assert api.get(f"/api/experiments/{run.json()['experiment_id']}").json()["asset"] == "AAPL"
 
 
+def test_dataset_only_asset_is_a_valid_empty_dashboard_state(tmp_path: Path) -> None:
+    """A legacy EXAMPLE record backed by AAPL data must not masquerade as AAPL research.
+
+    This is the production transition state: an AAPL registry dataset exists,
+    but no experiment has yet been persisted with asset=AAPL.  Every dashboard
+    collection request must be a serializable 200 empty collection, not a 5xx.
+    """
+    settings = Settings(
+        project_root=PROJECT_ROOT,
+        database_url=f"sqlite:///{tmp_path / 'dataset_only.db'}",
+        data_cache_directory=tmp_path / "cache",
+        admin_api_key="api-test-key",
+    )
+    with TestClient(create_app(settings), headers={"X-FinAgent-Admin-Key": "api-test-key"}) as api:
+        fetched = api.post(
+            "/api/data/fetch",
+            json={
+                "provider": "local_csv", "symbol": "AAPL", "start_date": "2024-01-01", "end_date": "2024-03-01",
+                "interval": "1d", "source_path": "data/raw/example_ohlcv.csv", "force_refresh": False,
+            },
+        )
+        assert fetched.status_code == 200
+        dataset_id = fetched.json()["dataset"]["dataset_id"]
+
+        # This models the immutable pre-provenance production record.  It
+        # intentionally remains EXAMPLE even though its source dataset is AAPL.
+        service = api.app.state.research_service
+        legacy_id = service.repository.save_experiment(
+            strategy="momentum", asset="EXAMPLE", dataset=dataset_id,
+            start_date="2024-01-01", end_date="2024-03-01", starting_capital=10_000,
+            random_seed=42, configuration={}, results={"metrics": {"total_return": 0.0}},
+            metrics={"total_return": 0.0}, trades=pd.DataFrame(),
+        )
+
+        dataset_response = api.get("/api/data/datasets?symbol=AAPL&limit=1")
+        aapl_experiments = api.get("/api/experiments?asset=aapl&limit=100")
+        nonexistent_experiments = api.get("/api/experiments?asset=MSFT&limit=100")
+        validations = api.get("/api/validation?asset=AAPL&limit=1")
+        legacy_experiments = api.get("/api/experiments?asset=EXAMPLE&limit=100")
+
+        assert dataset_response.status_code == 200
+        assert dataset_response.json()["items"][0]["dataset_id"] == dataset_id
+        for response, limit in ((aapl_experiments, 100), (nonexistent_experiments, 100), (validations, 1)):
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.json() == {"items": [], "pagination": {"limit": limit, "offset": 0, "total": 0}}
+        assert legacy_experiments.status_code == 200
+        assert legacy_experiments.json()["items"][0]["experiment_id"] == legacy_id
+        assert legacy_experiments.json()["items"][0]["asset"] == "EXAMPLE"
+
+
 def test_data_provider_failures_return_structured_provenance(client: tuple[TestClient, str, str]) -> None:
     api, _, _ = client
     response = api.post(
