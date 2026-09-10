@@ -166,6 +166,7 @@ class Improvement(APIModel):
     parent_metrics: dict[str, float | int | None]
     candidate_metrics: dict[str, float | int | None]
     window_pass_rate: float
+    window_count: int = 0
     parameter_changes: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -176,6 +177,22 @@ class ImprovementsResponse(APIModel):
 
 class ImprovementDetail(Improvement):
     windows: list[dict[str, Any]]
+
+
+class ImprovementContext(APIModel):
+    """Read-only evidence summary for the controlled improvement terminal."""
+
+    current_version: ConfigurationVersion | None = None
+    parent_version_id: str | None = None
+    parent_experiment_id: str | None = None
+    parent_critique: CritiqueResponse | None = None
+    candidates_generated: int = 0
+    candidates_evaluated: int = 0
+    candidates_promoted: int = 0
+    candidates_rejected: int = 0
+    latest_candidate_status: str | None = None
+    gate_thresholds_persisted: bool = False
+    cycle_boundaries_persisted: bool = False
 
 
 class ValidationSummary(APIModel):

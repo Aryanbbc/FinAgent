@@ -23,6 +23,7 @@ from finagent.data.registry import DatasetRegistry
 from finagent.database.db import Database
 from finagent.database.experiment_repository import ExperimentRepository
 from finagent.database.models import ExperimentRecord
+from finagent.learning.models import PromotionStatus
 from finagent.learning.workflow import run_improvement
 from finagent.live.repository import LiveMarketRepository
 from finagent.live.service import LiveMarketService
@@ -213,11 +214,16 @@ class ResearchService:
         return {**version.to_dict(), "status": version.status.value, "reason_codes": [code.value for code in version.reason_codes]}
 
     @staticmethod
-    def _improvement(decision: Any, parameter_changes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def _improvement(
+        decision: Any,
+        parameter_changes: list[dict[str, Any]] | None = None,
+        window_count: int = 0,
+    ) -> dict[str, Any]:
         return {
             "run_id": decision.candidate_id, "parent_version_id": decision.parent_version_id, "status": decision.status.value,
             "reason_codes": [code.value for code in decision.reason_codes], "parent_metrics": decision.parent_metrics.to_dict(),
             "candidate_metrics": decision.candidate_metrics.to_dict(), "window_pass_rate": decision.window_pass_rate,
+            "window_count": window_count,
             "parameter_changes": parameter_changes or [],
         }
 
@@ -228,6 +234,7 @@ class ResearchService:
                 row,
                 [item.to_dict() for item in candidate.parameter_changes]
                 if (candidate := self.repository.get_candidate_configuration(row.candidate_id)) else [],
+                self.repository.validation_window_count(row.candidate_id),
             )
             for row in rows
         ], total
@@ -237,9 +244,67 @@ class ResearchService:
         if decision is None:
             raise NotFoundError(f"Improvement run not found: {run_id}")
         candidate = self.repository.get_candidate_configuration(run_id)
-        payload = self._improvement(decision, [item.to_dict() for item in candidate.parameter_changes] if candidate else [])
-        payload["windows"] = [item.to_dict() for item in self.repository.get_validation_windows(run_id)]
+        windows = self.repository.get_validation_windows(run_id)
+        payload = self._improvement(
+            decision,
+            [item.to_dict() for item in candidate.parameter_changes] if candidate else [],
+            len(windows),
+        )
+        payload["windows"] = [item.to_dict() for item in windows]
         return payload
+
+    def improvement_context(self) -> dict[str, Any]:
+        """Return only persisted evidence needed to explain controlled improvement.
+
+        V0.5 stored individual candidates and decisions, rather than a mutable
+        run object.  The response deliberately reports that historical cycle
+        boundaries and numeric gate thresholds are unavailable instead of
+        reconstructing or guessing them.
+        """
+        latest_decision = self.repository.latest_candidate_evaluation()
+        current = self.repository.current_configuration_version()
+        parent_version_id = latest_decision.parent_version_id if latest_decision else (current.version_id if current else None)
+        parent = self.repository.get_configuration_version(parent_version_id) if parent_version_id else None
+        status_counts = self.repository.candidate_evaluation_status_counts(parent_version_id) if parent_version_id else {}
+        memory = None
+        if parent is not None:
+            experiment = dict(parent.configuration.get("experiment", {}))
+            asset = str(experiment.get("asset") or "").upper()
+            dataset = str(experiment.get("dataset_id") or experiment.get("dataset") or "")
+            if asset and dataset:
+                memory = self.repository.latest_experiment_memory_for_source(
+                    asset=asset,
+                    dataset=dataset,
+                    configuration=parent.configuration,
+                )
+
+        def version_payload(version: Any) -> dict[str, Any] | None:
+            if version is None:
+                return None
+            return {
+                "version_id": version.version_id,
+                "parent_version_id": version.parent_version_id,
+                "candidate_id": version.candidate_id,
+                "created_at": version.created_at,
+                "status": version.status.value,
+                "reason_codes": [code.value for code in version.reason_codes],
+                "validation_metrics": version.validation_metrics.to_dict() if version.validation_metrics else None,
+            }
+
+        critique = self.repository.get_critique(memory.experiment_id) if memory else None
+        return {
+            "current_version": version_payload(current),
+            "parent_version_id": parent_version_id,
+            "parent_experiment_id": memory.experiment_id if memory else None,
+            "parent_critique": critique.to_dict() if critique else None,
+            "candidates_generated": self.repository.candidate_configuration_count(parent_version_id) if parent_version_id else 0,
+            "candidates_evaluated": sum(status_counts.values()),
+            "candidates_promoted": status_counts.get(PromotionStatus.PROMOTED.value, 0),
+            "candidates_rejected": status_counts.get(PromotionStatus.REJECTED.value, 0),
+            "latest_candidate_status": latest_decision.status.value if latest_decision else None,
+            "gate_thresholds_persisted": False,
+            "cycle_boundaries_persisted": False,
+        }
 
     @staticmethod
     def _validation_summary(validation: Any) -> dict[str, Any]:

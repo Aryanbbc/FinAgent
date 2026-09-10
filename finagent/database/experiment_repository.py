@@ -647,6 +647,35 @@ class ExperimentRepository:
             for row in rows
         }
 
+    def candidate_configuration_count(self, parent_version_id: str) -> int:
+        """Return every generated candidate, including records not yet evaluated."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM candidate_configurations WHERE parent_version_id = ?",
+                (parent_version_id,),
+            ).fetchone()
+        return int(row["count"])
+
+    def candidate_evaluation_status_counts(self, parent_version_id: str) -> dict[str, int]:
+        """Return persisted promotion outcomes for a configuration parent."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS count FROM candidate_evaluations
+                WHERE parent_version_id = ? GROUP BY status
+                """,
+                (parent_version_id,),
+            ).fetchall()
+        return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def validation_window_count(self, candidate_id: str) -> int:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM walk_forward_validations WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+        return int(row["count"])
+
     def save_walk_forward_evaluation(self, evaluation: WalkForwardEvaluation, decision: PromotionDecision) -> None:
         """Persist every chronological test window plus its aggregate, final gate decision."""
         if evaluation.candidate_id != decision.candidate_id:

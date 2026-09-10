@@ -82,6 +82,16 @@ def test_validation_and_control_request_validation(client: tuple[TestClient, str
     assert api.post("/api/validation/run", json={"config_path": "config/missing.yaml"}).status_code == 400
 
 
+def test_improvement_context_exposes_only_persisted_summary_fields(client: tuple[TestClient, str, str]) -> None:
+    api, _, _ = client
+    response = api.get("/api/improvements/context")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidates_generated"] >= payload["candidates_evaluated"]
+    assert payload["gate_thresholds_persisted"] is False
+    assert payload["cycle_boundaries_persisted"] is False
+
+
 def test_missing_artifacts_return_consistent_404(client: tuple[TestClient, str, str]) -> None:
     api, _, _ = client
     response = api.get("/api/experiments/EXP-999999")
