@@ -126,17 +126,32 @@ It uses credentials, all methods, and all headers, but never wildcard origins. S
 
 ## First production workflow: real data to experiment
 
-1. Open the deployed **Data** page.
+1. The public Vercel UI is deliberately read-only. Use a Render shell or a secure administrator terminal; never put `FINAGENT_ADMIN_API_KEY` in Vercel, a browser request, or a `NEXT_PUBLIC_*` variable.
 2. In Render, create a Twelve Data API key and set it only as `TWELVE_DATA_API_KEY` on the API service. Redeploy after saving it. It must not be added to Vercel, `NEXT_PUBLIC_*`, a report, or the repository.
-3. Open the deployed **Data** page, select `Auto` (or `Twelve Data` to require that source), then fetch `AAPL`, `2022-01-01` through `2023-01-01` at daily interval. Do not set `source_path` in production; that option is for a checked-in local CSV. Auto tries configured Twelve Data first, then Yahoo Finance, Stooq, and a supplied local CSV only after retryable failures.
-4. Confirm more than 100 valid rows appear and that the dataset's metadata reports requested provider, actual provider, provider symbol, fetch timestamp, date range, interval, and adjustment mode. This stores provenance, validation output, metadata, and normalized OHLCV rows in PostgreSQL.
-5. Run a controlled experiment with the returned `dataset_id` using `POST /api/experiments/run`, for example:
+3. Set the API base URL locally, then fetch daily AAPL data with the protected API (omit the POST if the read-only check already returns a valid dataset):
 
-   ```json
-   {"config_path":"config/experiments.yaml","dataset_id":"DATA-AUTO-AAPL-1D"}
+   ```bash
+   export FINAGENT_API="https://<render-service>.onrender.com"
+   curl --fail "$FINAGENT_API/api/data/datasets?symbol=AAPL&limit=100"
+
+   curl --fail --request POST "$FINAGENT_API/api/data/fetch" \
+     --header "X-FinAgent-Admin-Key: $FINAGENT_ADMIN_API_KEY" \
+     --header "Content-Type: application/json" \
+     --data '{"provider":"auto","symbol":"AAPL","start_date":"2022-01-01","end_date":"2023-01-01","interval":"1d"}'
    ```
 
-   The dataset ID must be the value returned by the fetch request; it is not a guessed ticker string.
+   Do not set `source_path` in production; that option is for a checked-in local CSV. Auto tries configured Twelve Data first, then Yahoo Finance, Stooq, and a supplied local CSV only after retryable failures.
+4. Confirm more than 100 valid rows appear and that the dataset's metadata reports requested provider, actual provider, provider symbol, fetch timestamp, date range, interval, and adjustment mode. This stores provenance, validation output, metadata, and normalized OHLCV rows in PostgreSQL.
+5. Run a controlled experiment with the returned `dataset_id` using the protected `POST /api/experiments/run`, for example:
+
+   ```bash
+   curl --fail --request POST "$FINAGENT_API/api/experiments/run" \
+     --header "X-FinAgent-Admin-Key: $FINAGENT_ADMIN_API_KEY" \
+     --header "Content-Type: application/json" \
+     --data '{"config_path":"config/aapl_experiment.yaml","dataset_id":"DATA-AUTO-AAPL-1D"}'
+   ```
+
+   The dataset ID must be the value returned by the fetch request; it is not a guessed ticker string. When a registry dataset is selected, FinAgent uses its durable OHLCV rows and records its symbol (`AAPL`) as the experiment asset, rather than retaining a template asset from the YAML file.
 6. Open **Experiments** and the experiment detail. Trades, metrics, regime observations, agent decisions, critic/memory records, manifests, validation evidence, candidates, and promotion history are all written to PostgreSQL by their existing controlled workflows.
 
 From a Render shell (or another backend environment with the same secret and `DATABASE_URL`), the provider smoke check is:

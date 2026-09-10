@@ -54,6 +54,17 @@ def test_health_and_openapi(client: tuple[TestClient, str, str]) -> None:
     assert api.get("/openapi.json").status_code == 200
 
 
+def test_system_exposes_a_stable_non_sensitive_database_identity(client: tuple[TestClient, str, str]) -> None:
+    api, _, _ = client
+    first = api.get("/api/system").json()["database_identity"]
+    second = api.get("/api/system").json()["database_identity"]
+    assert first == second
+    assert first.startswith("sqlite:")
+    assert "/" not in first and "api.db" not in first
+    payload = api.get("/api/system").json()
+    assert all(isinstance(payload[key], int) and payload[key] >= 0 for key in ("critique_count", "experiment_memory_count", "candidate_evaluation_count"))
+
+
 def test_list_and_experiment_detail_preserve_existing_results(client: tuple[TestClient, str, str]) -> None:
     api, experiment_id, _ = client
     listing = api.get("/api/experiments?strategy=momentum")

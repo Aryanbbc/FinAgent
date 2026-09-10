@@ -238,11 +238,15 @@ class ConfigResponse(APIModel):
 class SystemResponse(APIModel):
     finagent_version: str
     database_path: str
+    database_identity: str
     database_exists: bool
     database_size_bytes: int
     git_revision: str | None = None
     experiment_count: int
     configuration_version_count: int
+    critique_count: int = Field(ge=0)
+    experiment_memory_count: int = Field(ge=0)
+    candidate_evaluation_count: int = Field(ge=0)
     latest_experiment_id: str | None = None
     dataset_count: int = 0
     latest_dataset_refresh: str | None = None

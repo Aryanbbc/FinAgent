@@ -8,6 +8,7 @@ import logging
 import json
 from collections.abc import Mapping
 from datetime import date
+from hashlib import sha256
 from math import isfinite
 from numbers import Real
 from pathlib import Path
@@ -449,14 +450,21 @@ class ResearchService:
         _, warnings = self.dataset_registry.list_datasets(limit=1, status="warning")
         health = self.database.health_check()
         demo = self.database.demo_seed("default")
+        artifacts = self.repository.persistence_artifact_counts()
+        # A stable deployment fingerprint makes an accidental Render database
+        # switch diagnosable without returning database credentials, a managed
+        # hostname, or a local filesystem path.
+        database_identity = f"{self.database.backend}:{sha256(self.database.database_identifier.encode('utf-8')).hexdigest()[:16]}"
         return {
             # Health/system intentionally expose status and backend only.  A
             # local file path or managed database hostname is deployment data.
             "finagent_version": __version__, "database_path": "redacted",
+            "database_identity": database_identity,
             "database_exists": self.database.backend == "postgresql" or (self.database.path is not None and self.database.path.exists()),
             "database_size_bytes": int(health["size_bytes"]), "database_backend": self.database.backend,
             "database_connectivity": bool(health["database_connectivity"]),
             "git_revision": revision, "experiment_count": experiment_count, "configuration_version_count": self.repository.count_configuration_versions(),
+            **artifacts,
             "latest_experiment_id": latest.experiment_id if latest else None, "dataset_count": dataset_count,
             "latest_dataset_refresh": latest_dataset.last_refreshed_at if latest_dataset else None, "data_providers": self.dataset_manager.providers.describe(),
             "data_quality_warnings": warnings, "database_status": health["status"], "database_integrity": health.get("integrity_check"),

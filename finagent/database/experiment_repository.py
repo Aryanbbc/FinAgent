@@ -960,6 +960,15 @@ class ExperimentRepository:
         with self.database.connect() as connection:
             return int(connection.execute("SELECT COUNT(*) AS count FROM configuration_versions").fetchone()["count"])
 
+    def persistence_artifact_counts(self) -> dict[str, int]:
+        """Return lightweight operational counts without exposing stored evidence."""
+        with self.database.connect() as connection:
+            return {
+                "critique_count": int(connection.execute("SELECT COUNT(*) AS count FROM critiques").fetchone()["count"]),
+                "experiment_memory_count": int(connection.execute("SELECT COUNT(*) AS count FROM experiment_memory").fetchone()["count"]),
+                "candidate_evaluation_count": int(connection.execute("SELECT COUNT(*) AS count FROM candidate_evaluations").fetchone()["count"]),
+            }
+
     def latest_validation_created_at(self) -> str | None:
         with self.database.connect() as connection:
             row = connection.execute("SELECT created_at FROM research_validations ORDER BY created_at DESC LIMIT 1").fetchone()
