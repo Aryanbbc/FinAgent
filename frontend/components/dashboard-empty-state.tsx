@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { DatasetSummary } from "@/lib/api";
+import { DashboardRunExperimentAction } from "@/components/dashboard-run-experiment-action";
 
 /** An intentional research state, distinct from a failed API request. */
 export function DashboardDatasetReadyState({ asset, dataset }: { asset: string; dataset: DatasetSummary }) {
@@ -9,7 +10,7 @@ export function DashboardDatasetReadyState({ asset, dataset }: { asset: string; 
     <p className="subtle">{dataset.dataset_id} · {dataset.row_count.toLocaleString()} daily OHLCV rows · {dataset.start_date} to {dataset.end_date}</p>
     <div className="state-actions">
       <Link className="button-link" href={`/data/${dataset.dataset_id}`}>View dataset</Link>
-      <Link className="button-link" href="/experiments">Run first experiment</Link>
+      <DashboardRunExperimentAction asset={asset} datasetId={dataset.dataset_id}/>
     </div>
   </section>;
 }

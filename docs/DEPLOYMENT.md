@@ -66,11 +66,11 @@ Set these API environment variables:
 
 Do **not** set `PORT`; Render supplies it. Do not set `DATABASE_URL` to SQLite in production. The cache and report directories may be ephemeral: cache files are only an optimization, report Markdown is regenerated from persisted research evidence, and canonical dataset rows live in PostgreSQL.
 
-The public Vercel UI is read-only by design. Invoke dataset ingestion and
-research runs from an administrator-controlled terminal with
-`X-FinAgent-Admin-Key: $FINAGENT_ADMIN_API_KEY`; see
-[security controls](SECURITY.md#public-and-protected-routes). Do not enter or
-store this key in a browser, Vercel environment variable, or frontend bundle.
+Dataset ingestion remains an administrator-controlled API operation. The
+frontend's controlled historical-experiment action is the one exception: it
+uses a Vercel server function to forward a selected dataset ID to Render with
+a server-only credential. The browser never receives that credential, its
+header, or a configurable backend path.
 
 Redeploy and verify:
 
@@ -106,13 +106,19 @@ Import the same repository into Vercel:
 | Output Directory | leave default |
 | Node.js | `20.x` or newer |
 
-Add this Production environment variable, then redeploy:
+Add these Production environment variables, then redeploy:
 
 | Name | Value |
 | --- | --- |
 | `NEXT_PUBLIC_FINAGENT_API_URL` | `https://<render-service>.onrender.com` |
+| `FINAGENT_API_URL` | `https://<render-service>.onrender.com` (server-only backend target for the experiment bridge) |
+| `FINAGENT_SERVER_ADMIN_API_KEY` | the same strong value as Render's `FINAGENT_ADMIN_API_KEY`; server-only Vercel secret |
 
-`NEXT_PUBLIC_*` values are compiled into the browser build. A changed backend URL requires a new frontend deployment. No `vercel.json` is needed.
+Only `NEXT_PUBLIC_*` values are compiled into the browser build. Do not use a
+`NEXT_PUBLIC_*` name for `FINAGENT_API_URL` or
+`FINAGENT_SERVER_ADMIN_API_KEY`; neither is rendered into HTML, sent by the
+browser, or returned by the Vercel route. A changed public backend URL requires
+a new frontend deployment. No `vercel.json` is needed.
 
 ## CORS
 
@@ -126,7 +132,7 @@ It uses credentials, all methods, and all headers, but never wildcard origins. S
 
 ## First production workflow: real data to experiment
 
-1. The public Vercel UI is deliberately read-only. Use a Render shell or a secure administrator terminal; never put `FINAGENT_ADMIN_API_KEY` in Vercel, a browser request, or a `NEXT_PUBLIC_*` variable.
+1. Fetch datasets from a Render shell or secure administrator terminal. For a browser-initiated historical experiment, configure the Vercel **server-only** `FINAGENT_SERVER_ADMIN_API_KEY` above. It is a copy of the Render API key, but must never be named `NEXT_PUBLIC_*`, placed in browser storage, API payloads, rendered HTML, or source control.
 2. In Render, create a Twelve Data API key and set it only as `TWELVE_DATA_API_KEY` on the API service. Redeploy after saving it. It must not be added to Vercel, `NEXT_PUBLIC_*`, a report, or the repository.
 3. Set the API base URL locally, then fetch daily AAPL data with the protected API (omit the POST if the read-only check already returns a valid dataset):
 
@@ -142,7 +148,7 @@ It uses credentials, all methods, and all headers, but never wildcard origins. S
 
    Do not set `source_path` in production; that option is for a checked-in local CSV. Auto tries configured Twelve Data first, then Yahoo Finance, Stooq, and a supplied local CSV only after retryable failures.
 4. Confirm more than 100 valid rows appear and that the dataset's metadata reports requested provider, actual provider, provider symbol, fetch timestamp, date range, interval, and adjustment mode. This stores provenance, validation output, metadata, and normalized OHLCV rows in PostgreSQL.
-5. Run a controlled experiment with the returned `dataset_id` using the protected `POST /api/experiments/run`, for example:
+5. After a dataset exists, select it in **Experiments** or click **Run first experiment** on its dashboard state. The Vercel server route accepts only the dataset ID and always sends the fixed `config/experiments.yaml` configuration to the protected Render API. An administrator can also run the protected endpoint directly:
 
    ```bash
    curl --fail --request POST "$FINAGENT_API/api/experiments/run" \

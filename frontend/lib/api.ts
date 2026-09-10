@@ -54,6 +54,7 @@ export type ExperimentRunInput = {
   position_fraction?: number; risk_max_position_size?: number; risk_max_drawdown?: number;
   risk_max_volatility?: number; start_date?: string; end_date?: string;
 };
+export type HistoricalExperimentRun = { status: string; experiment_id: string; metadata: { trade_count?: number; dataset_id?: string } | null };
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code = "REQUEST_FAILED", public details?: unknown, public requestId?: string) { super(message); }
@@ -64,6 +65,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(503, "The deployed frontend is missing NEXT_PUBLIC_FINAGENT_API_URL.", "API_URL_NOT_CONFIGURED");
   }
   const response = await fetch(`${apiBase}${path}`, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as Partial<ApiFailure> & { detail?: { message?: string } | string };
+    const legacy = typeof body.detail === "object" ? body.detail?.message : body.detail;
+    throw new ApiError(response.status, body.message ?? legacy ?? `Request failed (${response.status})`, body.error_code ?? "REQUEST_FAILED", body.details, body.request_id);
+  }
+  return response.json() as Promise<T>;
+}
+
+/**
+ * Calls the Vercel server route, never Render's protected endpoint directly.
+ * It intentionally sends only a registry dataset ID and no administrator key.
+ */
+async function serverRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as Partial<ApiFailure> & { detail?: { message?: string } | string };
     const legacy = typeof body.detail === "object" ? body.detail?.message : body.detail;
@@ -96,6 +111,7 @@ export const api = {
   dataset: (id: string) => request<Dataset>(`/api/data/datasets/${id}`),
   datasetOhlcv: (id: string, query = "") => request<OhlcvSeries>(`/api/data/datasets/${id}/ohlcv${query}`),
   fetchData: (input: DataFetchInput) => request<DataFetchResult>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
+  runHistoricalExperiment: (dataset_id: string) => serverRequest<HistoricalExperimentRun>("/api/research/experiments/run", { method: "POST", body: JSON.stringify({ dataset_id }) }),
   validateData: (dataset_id: string, missing_data_policy = "reject") => request<DatasetSummary>("/api/data/validate", { method: "POST", body: JSON.stringify({ dataset_id, missing_data_policy }) }),
   dataCollections: (query = "") => request<{ items: { collection_id: string; name: string; description: string | null; members: { dataset_id: string; version_id: string; symbol: string; adjustment_mode: string }[]; created_at: string | null; warnings: string[] }[]; pagination: Pagination }>(`/api/data/collections${query}`),
   liveStatus: () => request<{ enabled: boolean; provider: string; feed_mode: "polling"; poll_seconds: number; interval: "1min" | "5min" | "15min"; symbols: LiveFeedState[]; execution: "disabled" }>("/api/live/status"),
