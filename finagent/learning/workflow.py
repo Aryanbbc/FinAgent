@@ -219,9 +219,24 @@ def run_improvement(
         ),
         candidate_start=repository.next_candidate_number(),
     )
+    previous_fingerprints = repository.candidate_configuration_fingerprints(current_version.version_id)
+    if previous_fingerprints:
+        unseen_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if _canonical_configuration(candidate.configuration) not in previous_fingerprints
+        )
+        skipped = len(candidates) - len(unseen_candidates)
+        if skipped and logger:
+            logger.info(
+                "event=PREVIOUSLY_EVALUATED_CONFIGURATIONS_SKIPPED parent_version=%s count=%s",
+                current_version.version_id,
+                skipped,
+            )
+        candidates = unseen_candidates
     if not candidates:
         if logger:
-            logger.info("event=NO_CANDIDATES_GENERATED parent_version=%s", current_version.version_id)
+            logger.info("event=NO_NEW_CANDIDATES_GENERATED parent_version=%s", current_version.version_id)
         return ImprovementRunResult(current_version, (), (), (), None)
 
     experiment_configuration = current_version.configuration["experiment"]

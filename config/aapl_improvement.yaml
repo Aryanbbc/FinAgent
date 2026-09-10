@@ -10,49 +10,51 @@ learning:
   search:
     mode: neighborhood
     max_candidates: 5
-    # Each predeclared profile contains only allowlisted settings consumed by
-    # the deterministic strategy, risk, or execution layer.  Combinations are
-    # explicit because holding/cooldown controls and exposure sizing are most
-    # meaningful together; this is not an unbounded parameter search.
+    # This is a coarse, predeclared exposure frontier around the demonstrated
+    # low-churn behavior.  It intentionally does not tune a fine-grained value
+    # to the observed OOS promotion boundary.  Every setting is consumed by
+    # the deterministic strategy or execution layer.
     profiles:
       - changes:
           execution_controls:
-            minimum_holding_period_bars: 60
-            reentry_cooldown_bars: 20
-          strategy_weights:
-            moving_average: 0.10
-            momentum: 0.10
-            mean_reversion: 0.10
-      - changes:
-          execution_controls:
             minimum_holding_period_bars: 30
-            reentry_cooldown_bars: 10
+            reentry_cooldown_bars: 5
           strategy_weights:
             moving_average: 0.05
             momentum: 0.05
             mean_reversion: 0.05
       - changes:
           execution_controls:
-            minimum_holding_period_bars: 20
-            reentry_cooldown_bars: 10
-          regime_strategy_mappings:
-            bull: moving_average
-            bear: moving_average
-            sideways: moving_average
-            high_volatility: moving_average
-            low_volatility: moving_average
-            stress: moving_average
+            minimum_holding_period_bars: 60
+            reentry_cooldown_bars: 20
+          strategy_weights:
+            moving_average: 0.15
+            momentum: 0.15
+            mean_reversion: 0.15
       - changes:
           execution_controls:
-            minimum_holding_period_bars: 20
-            reentry_cooldown_bars: 10
-          momentum_entry_threshold: 0.02
-          momentum_exit_threshold: -0.04
+            minimum_holding_period_bars: 120
+            reentry_cooldown_bars: 40
+          strategy_weights:
+            moving_average: 0.25
+            momentum: 0.25
+            mean_reversion: 0.25
       - changes:
           execution_controls:
-            minimum_holding_period_bars: 20
-            reentry_cooldown_bars: 10
-          risk_confidence_threshold: 0.50
+            minimum_holding_period_bars: 120
+            reentry_cooldown_bars: 40
+          strategy_weights:
+            moving_average: 0.35
+            momentum: 0.35
+            mean_reversion: 0.35
+      - changes:
+          execution_controls:
+            minimum_holding_period_bars: 120
+            reentry_cooldown_bars: 40
+          strategy_weights:
+            moving_average: 0.50
+            momentum: 0.50
+            mean_reversion: 0.50
   walk_forward:
     train_size: 504
     test_size: 126

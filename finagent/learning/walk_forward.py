@@ -18,7 +18,7 @@ from finagent.learning.models import (
     WalkForwardEvaluation,
     WalkForwardWindow,
 )
-from finagent.evaluation.metrics import calculate_metrics
+from finagent.evaluation.metrics import calculate_metrics, calculate_trade_activity
 from finagent.regime.detector import RuleBasedRegimeDetector, RuleBasedRegimeDetectorConfig
 from finagent.strategies.factory import create_strategy
 
@@ -173,6 +173,16 @@ def _test_window_metrics(result: BacktestResult, train_size: int, configuration:
     test_trades = trades.loc[pd.to_datetime(trades["timestamp"], utc=True) >= first_test_timestamp] if not trades.empty else trades
     annualization = int(configuration.get("backtest", {}).get("annualization_factor", 252))
     metrics = calculate_metrics(test_curve, test_trades, annualization, initial_equity=initial_equity)
+    metrics.update(
+        calculate_trade_activity(
+            result.trades,
+            result.equity_curve,
+            annualization,
+            start_timestamp=first_test_timestamp,
+            end_timestamp=pd.Timestamp(test_curve.iloc[-1]["timestamp"]),
+            observation_periods=len(test_curve),
+        )
+    )
     # A full held-out window can legitimately remain flat when the deterministic
     # risk layer rejects every proposal.  ``calculate_metrics`` reports an
     # undefined Sharpe for a zero-standard-deviation return series; for

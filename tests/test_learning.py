@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -313,6 +314,10 @@ def test_sqlite_persists_validation_and_versions_immutably(tmp_path) -> None:
 
     assert repository.current_configuration_version() == baseline
     assert repository.get_candidate_configuration(candidate.candidate_id) == candidate
+    assert repository.candidate_configuration_fingerprints(baseline.version_id) == {
+        json.dumps(candidate.configuration, sort_keys=True, separators=(",", ":"))
+    }
+    assert repository.candidate_configuration_fingerprints("FinAgent-A9999") == set()
     assert len(repository.get_validation_windows(candidate.candidate_id)) == 2
     assert repository.get_candidate_evaluation(candidate.candidate_id) == decision
     with pytest.raises(sqlite3.IntegrityError):
@@ -358,6 +363,12 @@ def test_learning_can_be_disabled_and_opt_in_workflow_preserves_old_runner(tmp_p
     repository = ExperimentRepository(Database(database_path))
     assert repository.latest_candidate_evaluation() == result.decisions[0]
     assert [version.version_id for version in repository.configuration_version_history()] == ["FinAgent-A0001"]
+
+    # A second invocation must retain the immutable evidence and skip the
+    # exact configuration rather than evaluating the same OOS path again.
+    repeated = run_improvement(improvement_path, PROJECT_ROOT)
+    assert repeated is not None
+    assert repeated.candidates == repeated.evaluations == repeated.decisions == ()
 
 
 def test_learning_uses_only_matching_asset_dataset_memory_and_baseline(tmp_path) -> None:
@@ -473,3 +484,10 @@ def test_aapl_configs_share_a_dedicated_database_and_strict_chronological_plan()
         "step_size": 126,
         "min_windows": 5,
     }
+    profiles = improvement["learning"]["search"]["profiles"]
+    assert len(profiles) == 5
+    assert [
+        profile["changes"]["strategy_weights"]["moving_average"]
+        for profile in profiles
+    ] == [0.05, 0.15, 0.25, 0.35, 0.50]
+    assert all("execution_controls" in profile["changes"] for profile in profiles)

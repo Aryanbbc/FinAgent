@@ -627,6 +627,26 @@ class ExperimentRepository:
             }
         )
 
+    def candidate_configuration_fingerprints(self, parent_version_id: str | None = None) -> set[str]:
+        """Return canonical configurations already evaluated for an optional parent.
+
+        Candidate records are append-only.  This small query lets a later
+        controlled improvement cycle avoid spending another walk-forward run
+        on exactly the same configuration while keeping the stored evidence
+        available for audit.
+        """
+        statement = "SELECT configuration_json FROM candidate_configurations"
+        parameters: tuple[object, ...] = ()
+        if parent_version_id is not None:
+            statement += " WHERE parent_version_id = ?"
+            parameters = (parent_version_id,)
+        with self.database.connect() as connection:
+            rows = connection.execute(statement, parameters).fetchall()
+        return {
+            json.dumps(json.loads(row["configuration_json"]), sort_keys=True, separators=(",", ":"), default=str)
+            for row in rows
+        }
+
     def save_walk_forward_evaluation(self, evaluation: WalkForwardEvaluation, decision: PromotionDecision) -> None:
         """Persist every chronological test window plus its aggregate, final gate decision."""
         if evaluation.candidate_id != decision.candidate_id:
