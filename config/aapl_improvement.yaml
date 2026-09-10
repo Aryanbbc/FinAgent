@@ -1,0 +1,46 @@
+# User-invoked V0.5 controlled improvement example. It never enables live or paper trading.
+source_experiment_config: config/aapl_experiment.yaml
+# Must match config/aapl_experiment.yaml; never use the shared demo/example DB.
+database_path: data/aapl_research.db
+
+learning:
+  enabled: true
+  # Omit to retrieve the newest memory for this exact AAPL baseline only.
+  memory_experiment_id: null
+  search:
+    mode: neighborhood
+    max_candidates: 4
+    # Only these allowlisted configuration values may be changed by a candidate.
+    boundaries:
+      momentum_window:
+        min: 3
+        max: 12
+        step: 1
+      mean_reversion_window:
+        min: 4
+        max: 16
+        step: 2
+      risk_confidence_threshold:
+        min: 0.05
+        max: 0.50
+        step: 0.05
+      maximum_position_size:
+        min: 0.25
+        max: 1.0
+        step: 0.25
+      maximum_volatility:
+        min: 0.20
+        max: 0.80
+        step: 0.10
+  walk_forward:
+    train_size: 504
+    test_size: 126
+    # At least test_size: no held-out observation is reused in this example.
+    step_size: 126
+    min_windows: 5
+  promotion_gate:
+    minimum_sharpe_improvement: 0.05
+    maximum_drawdown: 0.20
+    minimum_window_pass_rate: 0.60
+    minimum_trades: 1
+    maximum_turnover: 5.0

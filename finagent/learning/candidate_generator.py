@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -64,8 +65,9 @@ class CandidateGenerator:
             CandidateReasonCode.NEIGHBORHOOD_SEARCH if self.mode == "neighborhood" else CandidateReasonCode.GRID_SEARCH
         )
         proposals: list[CandidateProposal] = []
+        fingerprints: set[str] = set()
         if self.mode == "neighborhood":
-            combinations = [((parameter, value),) for parameter, values in parameter_values for value in values]
+            combinations = self._neighborhood_combinations(parameter_values)
         else:
             active = [(parameter, values) for parameter, values in parameter_values if values]
             combinations = list(itertools.product(*[[(parameter, value) for value in values] for parameter, values in active]))
@@ -84,6 +86,10 @@ class CandidateGenerator:
             if not changes:
                 continue
             self.validate_configuration(configuration)
+            fingerprint = json.dumps(configuration, sort_keys=True, separators=(",", ":"), default=str)
+            if fingerprint in fingerprints:
+                continue
+            fingerprints.add(fingerprint)
             proposal = CandidateProposal(
                 candidate_id=f"CAND-{candidate_start + len(proposals):04d}",
                 parent_version_id=agent_input.current_version_id,
@@ -93,6 +99,30 @@ class CandidateGenerator:
             )
             proposals.append(proposal)
         return tuple(proposals)
+
+    @staticmethod
+    def _neighborhood_combinations(
+        parameter_values: Sequence[tuple[str, list[Any]]],
+    ) -> list[tuple[tuple[str, Any], ...]]:
+        """Interleave parameters so a small candidate budget explores distinct levers.
+
+        A previous implementation exhausted both neighbours of one parameter
+        before considering another.  With a four-candidate budget, that could
+        leave a run exploring only a narrow part of the approved space.  This
+        round-robin ordering remains deterministic and local to each boundary,
+        but gives every selected, executable parameter one opportunity first.
+        """
+        combinations: list[tuple[tuple[str, Any], ...]] = []
+        depth = 0
+        while True:
+            added = False
+            for parameter, values in parameter_values:
+                if depth < len(values):
+                    combinations.append(((parameter, values[depth]),))
+                    added = True
+            if not added:
+                return combinations
+            depth += 1
 
     def apply_parameter_change(self, configuration: Mapping[str, Any], parameter: str, value: Any) -> dict[str, Any]:
         """Return a validated copy with one allowlisted value changed for sensitivity research."""

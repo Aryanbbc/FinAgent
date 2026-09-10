@@ -1,0 +1,54 @@
+# Runnable V0.4 example. Paths are resolved relative to the repository root.
+experiment:
+  asset: AAPL
+  dataset: data/cache/yahoo_finance/AAPL/1d/DATA-YAHOO-FINANCE-AAPL-1D/v001.csv
+  start_date: 2018-01-02
+  end_date: 2026-08-28
+  starting_capital: 100000.0
+  random_seed: 42
+
+# Deliberately isolated from the shared example/demo database.  The baseline
+# experiment and its improvement cycle must use this same AAPL-only database.
+database_path: data/aapl_research.db
+
+features:
+  simple_return: true
+  log_return: true
+  rolling_volatility:
+    window: 10
+  sma:
+    window: 5
+  ema:
+    span: 5
+  momentum:
+    window: 5
+  rsi:
+    window: 14
+  rolling_volume_mean:
+    window: 10
+  volume_change: true
+
+regime:
+  enabled: true
+
+# V0.3 example: enable the deterministic technical → regime → strategy → risk flow.
+agents:
+  enabled: true
+
+# V0.4 example: generate a deterministic post-experiment critique and memory record.
+critic:
+  enabled: true
+
+strategy:
+  name: momentum
+  parameters:
+    lookback_window: 5
+    entry_threshold: 0.0
+    exit_threshold: -0.02
+
+backtest:
+  annualization_factor: 252
+  position_fraction: 1.0
+  transaction_costs:
+    percentage_fee: 0.001
+    fixed_fee: 1.0

@@ -172,6 +172,14 @@ def _test_window_metrics(result: BacktestResult, train_size: int, configuration:
     test_trades = trades.loc[pd.to_datetime(trades["timestamp"], utc=True) >= first_test_timestamp] if not trades.empty else trades
     annualization = int(configuration.get("backtest", {}).get("annualization_factor", 252))
     metrics = calculate_metrics(test_curve, test_trades, annualization, initial_equity=initial_equity)
+    # A full held-out window can legitimately remain flat when the deterministic
+    # risk layer rejects every proposal.  ``calculate_metrics`` reports an
+    # undefined Sharpe for a zero-standard-deviation return series; for
+    # walk-forward aggregation, zero is the conservative comparable value (it
+    # is neither rewarded nor treated as missing evidence).  This does not
+    # affect general experiment metrics and leaves zero-window samples invalid.
+    if metrics["sharpe_ratio"] is None and len(test_curve) > 1:
+        metrics["sharpe_ratio"] = 0.0
     transaction_cost = (
         float(test_trades["transaction_cost"].astype(float).sum()) if test_trades is not None and not test_trades.empty else 0.0
     )

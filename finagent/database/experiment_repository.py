@@ -268,6 +268,42 @@ class ExperimentRepository:
             row = connection.execute("SELECT experiment_id FROM experiment_memory ORDER BY created_at DESC LIMIT 1").fetchone()
         return self.get_experiment_memory(row["experiment_id"]) if row else None
 
+    def latest_experiment_memory_for_source(
+        self,
+        *,
+        asset: str,
+        dataset: str,
+        configuration: Mapping[str, Any] | None = None,
+    ) -> ExperimentMemoryRecord | None:
+        """Return the newest memory record for one exact historical research source.
+
+        Learning must never borrow a critique from the database's globally most
+        recent experiment: shared local databases can contain examples and
+        other assets.  The experiment row is the durable source-of-truth for
+        the asset and dataset recorded with memory.
+        """
+        expected_configuration = (
+            json.dumps(configuration, sort_keys=True, separators=(",", ":"), default=str) if configuration else None
+        )
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT memory.experiment_id, experiment.configuration_json
+                FROM experiment_memory AS memory
+                JOIN experiments AS experiment ON experiment.experiment_id = memory.experiment_id
+                WHERE experiment.asset = ? AND experiment.dataset = ?
+                ORDER BY memory.created_at DESC, memory.experiment_id DESC
+                """,
+                (asset, dataset),
+            ).fetchall()
+        for row in rows:
+            stored_configuration = json.dumps(
+                json.loads(row["configuration_json"]), sort_keys=True, separators=(",", ":"), default=str
+            )
+            if expected_configuration is None or stored_configuration == expected_configuration:
+                return self.get_experiment_memory(row["experiment_id"])
+        return None
+
     def get_trades(self, experiment_id: str) -> pd.DataFrame:
         return self.database.fetch_dataframe(
             "SELECT timestamp, side, price, quantity, transaction_cost, portfolio_value, realized_pnl, trade_return "

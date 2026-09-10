@@ -26,7 +26,7 @@ from finagent.learning.models import (
 from finagent.learning.promotion_gate import PromotionGate, PromotionGateConfig
 from finagent.learning.walk_forward import WalkForwardConfig, WalkForwardEvaluator, chronological_splits
 from finagent.learning.workflow import run_improvement
-from finagent.runner import run_experiment
+from finagent.runner import load_configuration, run_experiment
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +112,48 @@ def test_candidate_generation_is_allowlisted_and_reproducible() -> None:
         CandidateGenerator().generate(agent_input, ("arbitrary_code",))
 
 
+def test_candidate_generation_interleaves_levers_and_removes_duplicate_configurations() -> None:
+    configuration = _configuration()
+    agent_input = LearningAgentInput(
+        current_version_id="FinAgent-A0001",
+        current_configuration=configuration,
+        memory={"experiment_id": "EXP-000001"},
+        critique={"reason_codes": ["HIGH_DRAWDOWN", "UNDERPERFORMS_BENCHMARK"]},
+        boundaries={
+            "maximum_position_size": {"values": [0.75]},
+            "maximum_volatility": {"values": [0.4, 0.6]},
+            "momentum_window": {"values": [3, 3, 6]},
+        },
+        search_mode="neighborhood",
+        max_candidates=3,
+    )
+
+    candidates = LearningAgent().propose(agent_input)
+
+    assert len(candidates) == 3
+    assert [candidate.parameter_changes[0].parameter for candidate in candidates] == [
+        "maximum_position_size",
+        "maximum_volatility",
+        "momentum_window",
+    ]
+    fingerprints = {
+        yaml.safe_dump(candidate.configuration, sort_keys=True)
+        for candidate in CandidateGenerator(mode="neighborhood", max_candidates=5).generate(
+            LearningAgentInput(
+                current_version_id=agent_input.current_version_id,
+                current_configuration=configuration,
+                memory=agent_input.memory,
+                critique=agent_input.critique,
+                boundaries={"momentum_window": {"values": [3, 3]}},
+                search_mode="neighborhood",
+                max_candidates=5,
+            ),
+            ("momentum_window",),
+        )
+    }
+    assert len(fingerprints) == 1
+
+
 def test_candidate_constraints_reject_invalid_strategy_and_risk_configuration() -> None:
     invalid = _configuration()
     invalid["agents"]["strategy"]["available_strategies"]["moving_average"]["fast_window"] = 8
@@ -168,6 +210,34 @@ def test_walk_forward_splits_are_chronological_non_overlapping_and_no_lookahead(
     changed_future.loc[25:, "close"] *= 100
     second_evaluation = evaluator.evaluate(changed_future, _configuration(), candidate)
     assert first_evaluation.windows[0].candidate_metrics == second_evaluation.windows[0].candidate_metrics
+
+
+def test_aapl_walk_forward_plan_has_multiple_forward_only_windows() -> None:
+    configuration = WalkForwardConfig(train_size=504, test_size=126, step_size=126, min_windows=5)
+    splits = chronological_splits(2176, configuration)
+
+    assert len(splits) == 13
+    assert all(split.train_end == split.test_start for split in splits)
+    assert all(left.test_end <= right.test_start for left, right in zip(splits, splits[1:]))
+    assert splits[0] == type(splits[0])(0, 504, 504, 630)
+    assert splits[-1] == type(splits[-1])(1512, 2016, 2016, 2142)
+
+
+def test_walk_forward_treats_flat_complete_oos_window_as_zero_sharpe() -> None:
+    raw_data = pd.read_csv(PROJECT_ROOT / "data/raw/example_ohlcv.csv")
+    raw_data["timestamp"] = pd.to_datetime(raw_data["timestamp"], utc=True)
+    raw_data[["open", "high", "low", "close"]] = 100.0
+    configuration = _configuration()
+    candidate = CandidateProposal(
+        "CAND-0001", "FinAgent-A0001", configuration, (), (CandidateReasonCode.NEIGHBORHOOD_SEARCH,)
+    )
+
+    evaluation = WalkForwardEvaluator(WalkForwardConfig(train_size=15, test_size=10, step_size=10, min_windows=2)).evaluate(
+        raw_data, configuration, candidate
+    )
+
+    assert all(window.candidate_metrics.sharpe_ratio == 0.0 for window in evaluation.windows)
+    assert evaluation.candidate_aggregate.sharpe_ratio == 0.0
 
 
 def test_promotion_gate_requires_consistent_risk_adjusted_oos_results() -> None:
@@ -259,4 +329,121 @@ def test_learning_can_be_disabled_and_opt_in_workflow_preserves_old_runner(tmp_p
     assert result.current_version.version_id == "FinAgent-A0001"
     assert len(result.candidates) == len(result.evaluations) == len(result.decisions) == 1
     assert result.promoted_version is None
-    assert ExperimentRepository(Database(database_path)).latest_candidate_evaluation() == result.decisions[0]
+    repository = ExperimentRepository(Database(database_path))
+    assert repository.latest_candidate_evaluation() == result.decisions[0]
+    assert [version.version_id for version in repository.configuration_version_history()] == ["FinAgent-A0001"]
+
+
+def test_learning_uses_only_matching_asset_dataset_memory_and_baseline(tmp_path) -> None:
+    database_path = tmp_path / "isolated.db"
+    source = _configuration()
+    source.update({"database_path": str(database_path), "critic": {"enabled": True}})
+    source_path = tmp_path / "source.yaml"
+    source_path.write_text(yaml.safe_dump(source), encoding="utf-8")
+    source_experiment_id, _ = run_experiment(source_path, PROJECT_ROOT)
+
+    unrelated = copy.deepcopy(source)
+    unrelated["experiment"]["asset"] = "EXAMPLE"
+    unrelated_path = tmp_path / "unrelated.yaml"
+    unrelated_path.write_text(yaml.safe_dump(unrelated), encoding="utf-8")
+    unrelated_experiment_id, _ = run_experiment(unrelated_path, PROJECT_ROOT)
+
+    repository = ExperimentRepository(Database(database_path))
+    unrelated_configuration = load_configuration(unrelated_path, PROJECT_ROOT)
+    repository.save_configuration_version(
+        ConfigurationVersion(
+            "FinAgent-A0001",
+            None,
+            None,
+            unrelated_configuration,
+            None,
+            PromotionStatus.BASELINE,
+            (CandidateReasonCode.MEMORY_RETRIEVED,),
+            datetime.now(UTC).isoformat(),
+        )
+    )
+    source_configuration = load_configuration(source_path, PROJECT_ROOT)
+    assert repository.latest_experiment_memory_for_source(
+        asset="TEST",
+        dataset=source_configuration["experiment"]["dataset"],
+        configuration=source_configuration,
+    ).experiment_id == source_experiment_id
+    assert repository.latest_experiment_memory().experiment_id == unrelated_experiment_id
+
+    improvement_path = tmp_path / "improvement.yaml"
+    improvement_path.write_text(
+        yaml.safe_dump(
+            {
+                "source_experiment_config": str(source_path),
+                "database_path": str(database_path),
+                "learning": {
+                    "enabled": True,
+                    "search": {"mode": "neighborhood", "max_candidates": 1, "boundaries": {"momentum_window": {"values": [3]}}},
+                    "walk_forward": {"train_size": 15, "test_size": 10, "step_size": 10, "min_windows": 2},
+                    "promotion_gate": {"minimum_sharpe_improvement": 10.0, "minimum_window_pass_rate": 1.0, "minimum_trades": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = run_improvement(improvement_path, PROJECT_ROOT)
+
+    assert result is not None
+    assert result.current_version.version_id == "FinAgent-A0002"
+    assert result.current_version.configuration["experiment"]["asset"] == "TEST"
+    assert result.candidates[0].parent_version_id == "FinAgent-A0002"
+
+
+def test_duplicate_out_of_sample_outcomes_are_rejected_and_only_one_version_is_promoted(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "outcomes.db"
+    experiment_config = _configuration()
+    experiment_config.update({"database_path": str(database_path), "critic": {"enabled": True}})
+    source_path = tmp_path / "source.yaml"
+    source_path.write_text(yaml.safe_dump(experiment_config), encoding="utf-8")
+    run_experiment(source_path, PROJECT_ROOT)
+
+    def identical_outcomes(self, market_data, parent_configuration, candidate):
+        return _evaluation(candidate.candidate_id, improved=True)
+
+    monkeypatch.setattr(WalkForwardEvaluator, "evaluate", identical_outcomes)
+    improvement_path = tmp_path / "improvement.yaml"
+    improvement_path.write_text(
+        yaml.safe_dump(
+            {
+                "source_experiment_config": str(source_path),
+                "database_path": str(database_path),
+                "learning": {
+                    "enabled": True,
+                    "search": {"mode": "neighborhood", "max_candidates": 2, "boundaries": {"momentum_window": {"values": [3, 6]}}},
+                    "walk_forward": {"train_size": 15, "test_size": 10, "step_size": 10, "min_windows": 2},
+                    "promotion_gate": {"minimum_sharpe_improvement": 0.1, "minimum_window_pass_rate": 1.0, "minimum_trades": 2},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = run_improvement(improvement_path, PROJECT_ROOT)
+
+    assert result is not None
+    assert result.promoted_version is not None
+    assert result.decisions[0].status == PromotionStatus.PROMOTED
+    assert result.decisions[1].status == PromotionStatus.REJECTED
+    assert CandidateReasonCode.DUPLICATE_OUT_OF_SAMPLE_OUTCOME in result.decisions[1].reason_codes
+    assert [version.status for version in ExperimentRepository(Database(database_path)).configuration_version_history()] == [
+        PromotionStatus.BASELINE,
+        PromotionStatus.PROMOTED,
+    ]
+
+
+def test_aapl_configs_share_a_dedicated_database_and_strict_chronological_plan() -> None:
+    experiment = yaml.safe_load((PROJECT_ROOT / "config/aapl_experiment.yaml").read_text(encoding="utf-8"))
+    improvement = yaml.safe_load((PROJECT_ROOT / "config/aapl_improvement.yaml").read_text(encoding="utf-8"))
+
+    assert experiment["experiment"]["asset"] == "AAPL"
+    assert experiment["database_path"] == improvement["database_path"] == "data/aapl_research.db"
+    assert improvement["learning"]["walk_forward"] == {
+        "train_size": 504,
+        "test_size": 126,
+        "step_size": 126,
+        "min_windows": 5,
+    }
