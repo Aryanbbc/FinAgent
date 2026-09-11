@@ -44,7 +44,7 @@ export function DashboardWorkspace({ latest, experiment, market, regimes, trades
       {metrics.map(([name, value, tone]) => <div className={`terminal-kpi ${tone}`} key={name}><span>{name}</span><strong>{value}</strong></div>)}
     </section>
 
-    <div className="terminal-stage">
+    <div className="terminal-stage dashboard-stage">
       <section className="terminal-panel market-primary">
         <div className="terminal-panel-head"><div><span className="terminal-overline">Market replay · persisted historical OHLCV</span><h2>{latest.asset} <span>{latest.strategy}</span></h2></div><div className="terminal-meta"><span>{latest.experiment_id}</span><span>{trades.length} simulated trades</span><span>{dateTime(latest.created_at)}</span></div></div>
         <MarketChart rows={market?.items ?? []} trades={trades} decisions={decisions} experimentId={latest.experiment_id} strategy={latest.strategy} highlightTimestamp={highlightTimestamp}/>
