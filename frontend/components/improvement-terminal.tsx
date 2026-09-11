@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, type Critique, type ExperimentSummary, type Improvement, type ImprovementContext, type Version } from "@/lib/api";
 import { number, percent } from "@/lib/format";
 import { humanCode, metric, promotionChecks, reasonExplanation, valueText } from "@/lib/improvement-display";
-import { canRunImprovement, improvementContextUrl, improvementResultMessage, improvementRunReducer, initialImprovementRunState } from "@/lib/improvement-execution";
+import { canRunImprovement, improvementContextUrl, improvementResultMessage, improvementRunReducer, improvementViewState, initialImprovementRunState } from "@/lib/improvement-execution";
 
 type Props = { improvements: Improvement[]; versions: Version[]; context: ImprovementContext; selectedExperiment: ExperimentSummary | null; experiments: ExperimentSummary[] };
 
@@ -83,6 +83,7 @@ export function ImprovementTerminal({ improvements, versions, context, selectedE
   const [run, dispatchRun] = useReducer(improvementRunReducer, initialImprovementRunState);
   const improvementInFlight = useRef(false);
   const selected = candidates.find((item) => item.run_id === selectedId) ?? candidates[0];
+  const viewState = improvementViewState(selectedExperiment, improvements.length);
   const noPromotion = context.candidates_evaluated > 0 && context.candidates_promoted === 0;
   async function openCandidate(candidate: Improvement) {
     setSelectedId(candidate.run_id); setDrawerCandidate(candidate); setDetail(null); setDrawerError(""); setDrawerStatus("loading");
@@ -106,13 +107,14 @@ export function ImprovementTerminal({ improvements, versions, context, selectedE
     } finally { improvementInFlight.current = false; }
   }
 
-  if (!versions.length && !improvements.length && !selectedExperiment) return <div className="state"><h2>No controlled improvement evidence</h2><p>Select a persisted AAPL experiment to begin its configured deterministic improvement workflow.</p></div>;
+  if (viewState === "select-experiment") return <div className="state"><h2>No controlled improvement evidence</h2><p>Select a persisted AAPL experiment to begin its configured deterministic improvement workflow.</p></div>;
   return <div className="improvement-terminal">
     <section className="improvement-summary terminal-panel">
       <div className="terminal-panel-head"><div><span className="terminal-overline">Controlled learning pipeline</span><h2>Self-Improvement Summary</h2><p className="subtle">Parent version → critic findings → bounded candidates → chronological validation → strict promotion gate.</p></div><button type="button" disabled={!canRunImprovement(selectedExperiment) || run.status === "running"} onClick={() => void runCycle()}>{run.status === "running" ? "Running improvement cycle…" : "Run Improvement Cycle"}</button></div>
       <label className="filter-field improvement-parent-select">Parent experiment<select aria-label="Improvement parent experiment" value={selectedExperiment?.experiment_id ?? ""} disabled={run.status === "running"} onChange={(event) => { const experiment = experiments.find((item) => item.experiment_id === event.target.value); if (experiment) router.replace(improvementContextUrl(searchParams.toString(), experiment.asset, experiment.experiment_id)); }}><option value="" disabled>Select a persisted experiment</option>{experiments.map((item) => <option value={item.experiment_id} key={item.experiment_id}>{item.experiment_id} · {item.asset} · {item.strategy}</option>)}</select></label>
       {!selectedExperiment && <p className="notice">Select a persisted AAPL experiment to enable the controlled improvement cycle. No legacy experiment is selected automatically.</p>}
       {selectedExperiment && selectedExperiment.asset.toUpperCase() !== "AAPL" && <p className="notice">{selectedExperiment.experiment_id} is recorded as {selectedExperiment.asset}. Only an AAPL experiment is eligible for the declared AAPL improvement policy.</p>}
+      {viewState === "ready-to-run" && selectedExperiment && <p className="notice"><strong>{selectedExperiment.asset} / {selectedExperiment.experiment_id}</strong><br/>No improvement cycle has been run yet.</p>}
       <div className="improvement-summary-grid"><Metric label="Current FinAgent version" value={context.current_version?.version_id ?? "—"}/><Metric label="Parent version" value={context.parent_version_id ?? "—"}/><Metric label="Candidates generated" value={String(context.candidates_generated)}/><Metric label="Evaluated" value={String(context.candidates_evaluated)}/><Metric label="Promoted" value={String(context.candidates_promoted)}/><Metric label="Rejected" value={String(context.candidates_rejected)}/><Metric label="Latest recorded outcome" value={context.latest_candidate_status ?? "No decision"}/></div>
       {run.status !== "idle" && <div className={`request-state ${run.status === "error" ? "error" : run.status === "success" ? "success" : ""}`} role={run.status === "error" ? "alert" : undefined} aria-live="polite"><span>{run.status === "error" ? "Improvement unavailable" : run.status === "success" ? run.result?.metadata.promoted_version ? "New version promoted" : "No candidate promoted" : "Running improvement cycle…"}</span><p>{run.message || "The backend is evaluating only its configured, deterministic workflow."}</p>{run.status === "running" && <ul className="subtle"><li>Reading parent experiment</li><li>Generating candidates</li><li>Running walk-forward validation</li><li>Applying promotion gate</li></ul>}{run.status === "success" && run.result && <p className="subtle">{run.result.metadata.candidate_count} generated · {run.result.metadata.evaluated_count} evaluated · {run.result.metadata.rejected_count} rejected{run.result.metadata.promoted_version ? ` · ${run.result.metadata.promoted_version}` : ""}</p>}{run.status === "error" && <button type="button" onClick={() => dispatchRun({ type: "reset" })}>Retry</button>}</div>}
       {!context.cycle_boundaries_persisted && <p className="summary-note">Candidate counts are exact for the displayed parent version. Historic records do not store explicit cycle boundaries.</p>}

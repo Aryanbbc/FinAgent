@@ -3,15 +3,17 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api, type DatasetSummary, type ExperimentSummary, type System, type Version } from "@/lib/api";
-import { dashboardContextUrl, experimentForAsset } from "@/lib/dashboard-context";
+import { experimentForAsset } from "@/lib/dashboard-context";
+import { globalSelectionUrl, isSelectionAwareRoute } from "@/lib/global-selection";
 
 type Status = { api: "loading" | "ok" | "degraded" | "unavailable"; system?: System; datasets: DatasetSummary[]; experiments: ExperimentSummary[]; regime?: string; agentVersion?: string };
 
 export function GlobalStatus() {
   const router = useRouter(); const pathname = usePathname(); const searchParams = useSearchParams(); const [status, setStatus] = useState<Status>({ api: "loading", datasets: [], experiments: [] }); const [from, setFrom] = useState(""); const [to, setTo] = useState("");
   const dashboard = pathname === "/";
-  const selectedAsset = dashboard ? searchParams.get("asset") : null;
-  const selectedExperimentId = dashboard ? searchParams.get("experiment") : null;
+  const selectionAwareRoute = isSelectionAwareRoute(pathname);
+  const selectedAsset = selectionAwareRoute ? searchParams.get("asset") : null;
+  const selectedExperimentId = selectionAwareRoute ? searchParams.get("experiment") : null;
   useEffect(() => {
     let active = true;
     Promise.all([api.health(), api.system(), api.datasets("?limit=100"), api.experiments("?limit=100"), api.versions()]).then(async ([health, system, datasets, experiments, versions]) => {
@@ -20,17 +22,17 @@ export function GlobalStatus() {
       if (active) setStatus({ api: health.status, system, datasets: datasets.items, experiments: experiments.items, regime, agentVersion: latestVersion(versions.items)?.version_id });
     }).catch(() => { if (active) setStatus({ api: "unavailable", datasets: [], experiments: [] }); });
     return () => { active = false; };
-  }, [selectedAsset, selectedExperimentId]);
+  }, [pathname, selectedAsset, selectedExperimentId]);
   const assets = [...new Set([...status.datasets.map((item) => item.symbol), ...status.experiments.map((item) => item.asset)])].sort();
   const currentExperiment = experimentForAsset(status.experiments, selectedAsset, selectedExperimentId);
   const currentAsset = selectedAsset ?? currentExperiment?.asset ?? "";
   function selectAsset(asset: string) {
     const compatible = experimentForAsset(status.experiments, asset, selectedExperimentId);
-    router.replace(dashboardContextUrl(searchParams.toString(), asset, compatible?.experiment_id));
+    router.replace(globalSelectionUrl(pathname, searchParams.toString(), asset, compatible?.experiment_id));
   }
   function selectExperiment(experimentId: string) {
     const experiment = status.experiments.find((item) => item.experiment_id === experimentId);
-    if (experiment) router.replace(dashboardContextUrl(searchParams.toString(), experiment.asset, experiment.experiment_id));
+    if (experiment) router.replace(globalSelectionUrl(pathname, searchParams.toString(), experiment.asset, experiment.experiment_id));
   }
   const label = status.api === "loading" ? "Checking API" : status.api === "ok" ? "API online" : status.api === "degraded" ? "API degraded" : "API unavailable";
   return <section className={`global-status ${status.api}`} aria-live="polite">

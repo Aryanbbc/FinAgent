@@ -6,8 +6,9 @@ import { POST } from "../app/api/research/experiments/run/route";
 import { POST as runImprovement } from "../app/api/research/improvements/run/route";
 import { api } from "../lib/api";
 import { dashboardContextUrl } from "../lib/dashboard-context";
+import { globalSelectionUrl, isSelectionAwareRoute } from "../lib/global-selection";
 import { historicalRunReducer, initialHistoricalRunState } from "../lib/historical-execution";
-import { canRunImprovement, improvementContextUrl, improvementResultMessage, improvementRunReducer, initialImprovementRunState } from "../lib/improvement-execution";
+import { canRunImprovement, improvementContextUrl, improvementResultMessage, improvementRunReducer, improvementViewState, initialImprovementRunState, resolveImprovementExperiment } from "../lib/improvement-execution";
 
 const routeUrl = "https://finagent.example/api/research/experiments/run";
 
@@ -217,4 +218,26 @@ test("improvement UI only enables explicit AAPL selection and preserves it after
   assert.equal(query.get("asset"), "AAPL");
   assert.equal(query.get("experiment"), "EXP-000002");
   assert.equal(query.get("view"), "cycle");
+});
+
+test("improvement selection canonicalizes a direct AAPL link without falling back to EXAMPLE", () => {
+  const aapl = { experiment_id: "EXP-000002", asset: "AAPL", created_at: "2026-09-11", strategy: "momentum", start_date: "2022-01-01", end_date: "2023-01-01", total_return: null, sharpe_ratio: null, maximum_drawdown: null, number_of_trades: null };
+  const legacy = { ...aapl, experiment_id: "EXP-000001", asset: "EXAMPLE" };
+  const experiments = [legacy, aapl];
+  assert.equal(resolveImprovementExperiment(experiments, "AAPL", "EXP-000002")?.experiment_id, aapl.experiment_id);
+  assert.equal(resolveImprovementExperiment(experiments, undefined, undefined)?.experiment_id, aapl.experiment_id);
+  assert.equal(resolveImprovementExperiment(experiments, "AAPL", legacy.experiment_id)?.experiment_id, aapl.experiment_id);
+  assert.equal(resolveImprovementExperiment([legacy], undefined, undefined), null);
+  const deepLink = improvementContextUrl("view=cycle", aapl.asset, aapl.experiment_id);
+  assert.equal(deepLink, "/improvements?view=cycle&asset=AAPL&experiment=EXP-000002");
+  assert.equal(isSelectionAwareRoute("/improvements"), true);
+  assert.equal(globalSelectionUrl("/improvements", "view=cycle", aapl.asset, aapl.experiment_id), deepLink);
+  assert.equal(globalSelectionUrl("/", "view=cycle", aapl.asset, aapl.experiment_id), "/?view=cycle&asset=AAPL&experiment=EXP-000002");
+});
+
+test("improvement empty state distinguishes no selection, ready parent, and persisted evidence", () => {
+  const aapl = { experiment_id: "EXP-000002", asset: "AAPL", created_at: "2026-09-11", strategy: "momentum", start_date: "2022-01-01", end_date: "2023-01-01", total_return: null, sharpe_ratio: null, maximum_drawdown: null, number_of_trades: null };
+  assert.equal(improvementViewState(null, 0), "select-experiment");
+  assert.equal(improvementViewState(aapl, 0), "ready-to-run");
+  assert.equal(improvementViewState(aapl, 1), "evidence");
 });

@@ -1,13 +1,31 @@
 import { DataState } from "@/components/data-state";
 import { ImprovementTerminal } from "@/components/improvement-terminal";
 import { api } from "@/lib/api";
+import { improvementContextUrl, resolveImprovementExperiment } from "@/lib/improvement-execution";
 import { load } from "@/lib/load";
+import { redirect } from "next/navigation";
 
-type Props = { searchParams: Promise<{ asset?: string; experiment?: string }> };
+type Params = Record<string, string | string[] | undefined>;
+type Props = { searchParams: Promise<Params> };
+
+function value(params: Params, key: string) {
+  const item = params[key];
+  return typeof item === "string" ? item : Array.isArray(item) ? item[0] : undefined;
+}
+
+function queryString(params: Params) {
+  const query = new URLSearchParams();
+  for (const [key, item] of Object.entries(params)) {
+    const itemValue = typeof item === "string" ? item : Array.isArray(item) ? item[0] : undefined;
+    if (itemValue) query.set(key, itemValue);
+  }
+  return query.toString();
+}
 
 export default async function Improvements({ searchParams }: Props) {
   const query = await searchParams;
-  const requestedAsset = query.asset?.trim().toUpperCase();
+  const requestedAsset = value(query, "asset")?.trim().toUpperCase();
+  const requestedExperimentId = value(query, "experiment")?.trim().toUpperCase();
   const [improvements, versions, context, experiments] = await Promise.all([
     load(api.improvements("?limit=100")),
     load(api.versions()),
@@ -15,10 +33,12 @@ export default async function Improvements({ searchParams }: Props) {
     load(api.experiments("?limit=100")),
   ]);
   const availableExperiments = experiments.data?.items ?? [];
-  const requestedExperiment = availableExperiments.find((item) => item.experiment_id === query.experiment && (!requestedAsset || item.asset === requestedAsset));
-  // An explicit asset may select its newest matching experiment.  With no
-  // explicit context we intentionally do not fall back to a legacy EXAMPLE row.
-  const selectedExperiment = requestedExperiment ?? (requestedAsset ? availableExperiments.find((item) => item.asset === requestedAsset) ?? null : null);
+  const selectedExperiment = resolveImprovementExperiment(availableExperiments, requestedAsset, requestedExperimentId);
+  // Direct visits and sidebar navigation become an auditable selection URL.
+  // The resolver only supplies AAPL as the policy default, never EXAMPLE.
+  if (selectedExperiment && (requestedAsset !== selectedExperiment.asset.toUpperCase() || requestedExperimentId !== selectedExperiment.experiment_id)) {
+    redirect(improvementContextUrl(queryString(query), selectedExperiment.asset, selectedExperiment.experiment_id));
+  }
   return <>
     <header className="terminal-page-head">
       <div>
