@@ -120,6 +120,15 @@ Only `NEXT_PUBLIC_*` values are compiled into the browser build. Do not use a
 browser, or returned by the Vercel route. A changed public backend URL requires
 a new frontend deployment. No `vercel.json` is needed.
 
+With those two server-only variables present, the **Experiments** page can run
+the fixed historical configuration for a selected registry dataset, and the
+**Self-Improvement** page can run the fixed AAPL improvement policy for a
+selected persisted AAPL experiment. The browser sends only the selected ID and
+asset to same-origin Vercel routes. The route supplies the admin header only
+when calling Render's existing protected endpoints. It cannot select an
+arbitrary YAML file, lower a promotion threshold, run live/paper trading, or
+fall back from an explicit AAPL selection to a legacy `EXAMPLE` record.
+
 ## CORS
 
 FastAPI allows only:
@@ -158,7 +167,7 @@ It uses credentials, all methods, and all headers, but never wildcard origins. S
    ```
 
    The dataset ID must be the value returned by the fetch request; it is not a guessed ticker string. When a registry dataset is selected, FinAgent uses its durable OHLCV rows and records its symbol (`AAPL`) as the experiment asset, rather than retaining a template asset from the YAML file.
-6. Open **Experiments** and the experiment detail. Trades, metrics, regime observations, agent decisions, critic/memory records, manifests, validation evidence, candidates, and promotion history are all written to PostgreSQL by their existing controlled workflows.
+6. Open **Self-Improvement**, select the new AAPL experiment, and click **Run Improvement Cycle**. It binds the workflow to that exact experiment/memory record and displays its real candidate evidence after refresh. A promotion is displayed only when the existing held-out-data gate creates a new version; `No candidate promoted` is an expected successful outcome. Trades, metrics, regime observations, agent decisions, critic/memory records, manifests, validation evidence, candidates, and promotion history are all written to PostgreSQL by their existing controlled workflows.
 
 From a Render shell (or another backend environment with the same secret and `DATABASE_URL`), the provider smoke check is:
 

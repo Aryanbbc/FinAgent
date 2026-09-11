@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { api, publicMutationControlsEnabled, type Critique, type Improvement, type ImprovementContext, type Version } from "@/lib/api";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { api, type Critique, type ExperimentSummary, type Improvement, type ImprovementContext, type Version } from "@/lib/api";
 import { number, percent } from "@/lib/format";
 import { humanCode, metric, promotionChecks, reasonExplanation, valueText } from "@/lib/improvement-display";
+import { canRunImprovement, improvementContextUrl, improvementResultMessage, improvementRunReducer, initialImprovementRunState } from "@/lib/improvement-execution";
 
-type Props = { improvements: Improvement[]; versions: Version[]; context: ImprovementContext };
+type Props = { improvements: Improvement[]; versions: Version[]; context: ImprovementContext; selectedExperiment: ExperimentSummary | null; experiments: ExperimentSummary[] };
 
 function tone(status: string) { return status === "PROMOTED" ? "pass" : status === "REJECTED" ? "fail" : "unknown"; }
 function candidateStatus(candidate: Improvement) { return candidate.status === "PROMOTED" ? "PROMOTED" : "REJECTED"; }
@@ -70,16 +71,17 @@ function CandidateDrawer({ candidate, detail, status, error, onClose }: { candid
   </aside></div>;
 }
 
-export function ImprovementTerminal({ improvements, versions, context }: Props) {
+export function ImprovementTerminal({ improvements, versions, context, selectedExperiment, experiments }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const candidates = context.parent_version_id ? improvements.filter((item) => item.parent_version_id === context.parent_version_id) : improvements;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerCandidate, setDrawerCandidate] = useState<Improvement | null>(null);
   const [detail, setDetail] = useState<Improvement | null>(null);
   const [drawerStatus, setDrawerStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [drawerError, setDrawerError] = useState("");
-  const [runStatus, setRunStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [runMessage, setRunMessage] = useState("");
+  const [run, dispatchRun] = useReducer(improvementRunReducer, initialImprovementRunState);
+  const improvementInFlight = useRef(false);
   const selected = candidates.find((item) => item.run_id === selectedId) ?? candidates[0];
   const noPromotion = context.candidates_evaluated > 0 && context.candidates_promoted === 0;
   async function openCandidate(candidate: Improvement) {
@@ -88,17 +90,31 @@ export function ImprovementTerminal({ improvements, versions, context }: Props) 
     catch (reason) { setDrawerError(reason instanceof Error ? reason.message : "Candidate detail could not be loaded."); setDrawerStatus("error"); }
   }
   async function runCycle() {
-    setRunStatus("loading"); setRunMessage("");
-    try { await api.run("improvements", "config/improvement.yaml"); setRunStatus("success"); setRunMessage("The configured deterministic improvement workflow completed. Refreshing persisted evidence…"); router.refresh(); }
-    catch (reason) { setRunStatus("error"); setRunMessage(reason instanceof Error ? reason.message : "The improvement workflow could not be started."); }
+    if (!canRunImprovement(selectedExperiment)) {
+      dispatchRun({ type: "failure", message: selectedExperiment ? "Controlled improvement is available only for an AAPL experiment." : "Select a persisted AAPL experiment before running an improvement cycle." });
+      return;
+    }
+    if (improvementInFlight.current) return;
+    improvementInFlight.current = true;
+    dispatchRun({ type: "start" });
+    try {
+      const result = await api.runImprovementCycle(selectedExperiment.experiment_id, selectedExperiment.asset);
+      dispatchRun({ type: "success", result, message: improvementResultMessage(result) });
+      router.replace(improvementContextUrl(searchParams.toString(), selectedExperiment.asset, selectedExperiment.experiment_id)); router.refresh();
+    } catch (reason) {
+      dispatchRun({ type: "failure", message: reason instanceof Error ? reason.message : "The improvement workflow could not be started." });
+    } finally { improvementInFlight.current = false; }
   }
 
-  if (!versions.length && !improvements.length) return <div className="state"><h2>No controlled improvement evidence</h2><p>Run a completed historical experiment and its configured deterministic improvement workflow to populate this terminal.</p></div>;
+  if (!versions.length && !improvements.length && !selectedExperiment) return <div className="state"><h2>No controlled improvement evidence</h2><p>Select a persisted AAPL experiment to begin its configured deterministic improvement workflow.</p></div>;
   return <div className="improvement-terminal">
     <section className="improvement-summary terminal-panel">
-      <div className="terminal-panel-head"><div><span className="terminal-overline">Controlled learning pipeline</span><h2>Self-Improvement Summary</h2><p className="subtle">Parent version → critic findings → bounded candidates → chronological validation → strict promotion gate.</p></div>{publicMutationControlsEnabled && <button type="button" disabled={runStatus === "loading"} onClick={() => void runCycle()}>{runStatus === "loading" ? "Running improvement…" : "Run Improvement Cycle"}</button>}</div>
+      <div className="terminal-panel-head"><div><span className="terminal-overline">Controlled learning pipeline</span><h2>Self-Improvement Summary</h2><p className="subtle">Parent version → critic findings → bounded candidates → chronological validation → strict promotion gate.</p></div><button type="button" disabled={!canRunImprovement(selectedExperiment) || run.status === "running"} onClick={() => void runCycle()}>{run.status === "running" ? "Running improvement cycle…" : "Run Improvement Cycle"}</button></div>
+      <label className="filter-field improvement-parent-select">Parent experiment<select aria-label="Improvement parent experiment" value={selectedExperiment?.experiment_id ?? ""} disabled={run.status === "running"} onChange={(event) => { const experiment = experiments.find((item) => item.experiment_id === event.target.value); if (experiment) router.replace(improvementContextUrl(searchParams.toString(), experiment.asset, experiment.experiment_id)); }}><option value="" disabled>Select a persisted experiment</option>{experiments.map((item) => <option value={item.experiment_id} key={item.experiment_id}>{item.experiment_id} · {item.asset} · {item.strategy}</option>)}</select></label>
+      {!selectedExperiment && <p className="notice">Select a persisted AAPL experiment to enable the controlled improvement cycle. No legacy experiment is selected automatically.</p>}
+      {selectedExperiment && selectedExperiment.asset.toUpperCase() !== "AAPL" && <p className="notice">{selectedExperiment.experiment_id} is recorded as {selectedExperiment.asset}. Only an AAPL experiment is eligible for the declared AAPL improvement policy.</p>}
       <div className="improvement-summary-grid"><Metric label="Current FinAgent version" value={context.current_version?.version_id ?? "—"}/><Metric label="Parent version" value={context.parent_version_id ?? "—"}/><Metric label="Candidates generated" value={String(context.candidates_generated)}/><Metric label="Evaluated" value={String(context.candidates_evaluated)}/><Metric label="Promoted" value={String(context.candidates_promoted)}/><Metric label="Rejected" value={String(context.candidates_rejected)}/><Metric label="Latest recorded outcome" value={context.latest_candidate_status ?? "No decision"}/></div>
-      {runStatus !== "idle" && <div className={`request-state ${runStatus === "error" ? "error" : runStatus === "success" ? "success" : ""}`}><span>{runStatus === "error" ? "Improvement unavailable" : runStatus === "success" ? "Improvement completed" : "Running workflow"}</span><p>{runMessage || "The backend is evaluating only its configured, deterministic workflow."}</p></div>}
+      {run.status !== "idle" && <div className={`request-state ${run.status === "error" ? "error" : run.status === "success" ? "success" : ""}`} role={run.status === "error" ? "alert" : undefined} aria-live="polite"><span>{run.status === "error" ? "Improvement unavailable" : run.status === "success" ? run.result?.metadata.promoted_version ? "New version promoted" : "No candidate promoted" : "Running improvement cycle…"}</span><p>{run.message || "The backend is evaluating only its configured, deterministic workflow."}</p>{run.status === "running" && <ul className="subtle"><li>Reading parent experiment</li><li>Generating candidates</li><li>Running walk-forward validation</li><li>Applying promotion gate</li></ul>}{run.status === "success" && run.result && <p className="subtle">{run.result.metadata.candidate_count} generated · {run.result.metadata.evaluated_count} evaluated · {run.result.metadata.rejected_count} rejected{run.result.metadata.promoted_version ? ` · ${run.result.metadata.promoted_version}` : ""}</p>}{run.status === "error" && <button type="button" onClick={() => dispatchRun({ type: "reset" })}>Retry</button>}</div>}
       {!context.cycle_boundaries_persisted && <p className="summary-note">Candidate counts are exact for the displayed parent version. Historic records do not store explicit cycle boundaries.</p>}
     </section>
     {noPromotion && <section className="no-promotion"><strong>NO CANDIDATE PROMOTED</strong><span>Every displayed candidate remains part of the research record; none met every deterministic promotion safeguard.</span></section>}

@@ -799,13 +799,33 @@ class ResearchService:
         log_event(self.logger, "EXPERIMENT_RUN_COMPLETED", workflow="experiment", artifact_id=experiment_id)
         return {"workflow": "experiment", "status": "completed", "experiment_id": experiment_id, "run_id": None, "validation_id": None, "metadata": {"trade_count": result["metrics"].get("number_of_trades"), "critic_enabled": result.get("critique", {}).get("enabled", False), "dataset_id": dataset_id}}
 
-    def run_improvement(self, config_path: str) -> dict[str, Any]:
+    def run_improvement(self, config_path: str, *, experiment_id: str | None = None, asset: str | None = None) -> dict[str, Any]:
+        """Run the existing bounded workflow against one verified parent record."""
+        parent = self._require_experiment(experiment_id) if experiment_id else None
+        if parent is not None and asset and parent.asset.upper() != str(asset).upper():
+            raise InvalidConfigurationError("The selected experiment does not belong to the requested asset")
         log_event(self.logger, "IMPROVEMENT_RUN_STARTED", workflow="improvement")
-        result = run_improvement(self._config_path(config_path), self.settings.project_root, self.logger, database_url=self.settings.database_url)
+        result = run_improvement(
+            self._config_path(config_path),
+            self.settings.project_root,
+            self.logger,
+            database_url=self.settings.database_url,
+            source_configuration=parent.configuration if parent else None,
+            memory_experiment_id=parent.experiment_id if parent else None,
+        )
         if result is None:
-            return {"workflow": "improvement", "status": "disabled", "experiment_id": None, "run_id": None, "validation_id": None, "metadata": {"reason": "learning.enabled is false"}}
+            return {"workflow": "improvement", "status": "disabled", "experiment_id": parent.experiment_id if parent else None, "run_id": None, "validation_id": None, "metadata": {"reason": "learning.enabled is false"}}
         latest = result.decisions[-1] if result.decisions else None
-        response = {"workflow": "improvement", "status": "completed", "experiment_id": None, "run_id": latest.candidate_id if latest else None, "validation_id": None, "metadata": {"candidate_count": len(result.candidates), "promoted_version": result.promoted_version.version_id if result.promoted_version else None}}
+        response = {
+            "workflow": "improvement", "status": "completed", "experiment_id": parent.experiment_id if parent else None,
+            "run_id": latest.candidate_id if latest else None, "validation_id": None,
+            "metadata": {
+                "candidate_count": len(result.candidates),
+                "evaluated_count": len(result.evaluations),
+                "rejected_count": sum(item.status == PromotionStatus.REJECTED for item in result.decisions),
+                "promoted_version": result.promoted_version.version_id if result.promoted_version else None,
+            },
+        }
         log_event(self.logger, "IMPROVEMENT_RUN_COMPLETED", workflow="improvement", artifact_id=response["run_id"])
         return response
 

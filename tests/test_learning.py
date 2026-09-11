@@ -371,6 +371,60 @@ def test_learning_can_be_disabled_and_opt_in_workflow_preserves_old_runner(tmp_p
     assert repeated.candidates == repeated.evaluations == repeated.decisions == ()
 
 
+def test_explicit_aapl_parent_source_persists_real_candidate_evidence(tmp_path) -> None:
+    """Exercise the same explicit parent binding used by the protected API route."""
+    database_path = tmp_path / "aapl.db"
+    data_path = tmp_path / "aapl.csv"
+    timestamps = pd.date_range("2021-01-04", periods=80, freq="B", tz="UTC")
+    close = pd.Series(range(80), dtype=float).mul(0.3).add(120.0)
+    pd.DataFrame({
+        "timestamp": timestamps, "open": close - 0.2, "high": close + 0.5,
+        "low": close - 0.5, "close": close, "volume": 1_000.0,
+    }).to_csv(data_path, index=False)
+    source = _configuration()
+    source["experiment"].update({"asset": "AAPL", "dataset": str(data_path)})
+    source.update({"database_path": str(database_path), "critic": {"enabled": True}})
+    source_path = tmp_path / "aapl_experiment.yaml"
+    source_path.write_text(yaml.safe_dump(source), encoding="utf-8")
+    experiment_id, _ = run_experiment(source_path, PROJECT_ROOT)
+    persisted_source = load_configuration(source_path, PROJECT_ROOT)
+
+    improvement_path = tmp_path / "aapl_improvement.yaml"
+    improvement_path.write_text(
+        yaml.safe_dump(
+            {
+                # The persisted source override below is authoritative; this
+                # unrelated path proves the workflow never falls back to it.
+                "source_experiment_config": "config/experiments.yaml",
+                "learning": {
+                    "enabled": True,
+                    "search": {"mode": "neighborhood", "max_candidates": 1, "boundaries": {"moving_average_fast_window": {"values": [2]}}},
+                    "walk_forward": {"train_size": 20, "test_size": 10, "step_size": 10, "min_windows": 2},
+                    # Deliberately strict: this confirms that rejection still
+                    # persists evidence and never creates a promoted version.
+                    "promotion_gate": {"minimum_sharpe_improvement": 10.0, "minimum_window_pass_rate": 1.0, "minimum_trades": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = run_improvement(
+        improvement_path,
+        PROJECT_ROOT,
+        source_configuration=persisted_source,
+        memory_experiment_id=experiment_id,
+    )
+
+    assert result is not None
+    assert result.current_version.configuration["experiment"]["asset"] == "AAPL"
+    assert len(result.candidates) == len(result.evaluations) == len(result.decisions) == 1
+    assert result.promoted_version is None
+    repository = ExperimentRepository(Database(database_path))
+    assert repository.get_experiment_memory(experiment_id) is not None
+    assert repository.get_candidate_evaluation(result.candidates[0].candidate_id) == result.decisions[0]
+    assert repository.get_validation_windows(result.candidates[0].candidate_id)
+
+
 def test_learning_uses_only_matching_asset_dataset_memory_and_baseline(tmp_path) -> None:
     database_path = tmp_path / "isolated.db"
     source = _configuration()

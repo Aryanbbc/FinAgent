@@ -501,6 +501,19 @@ class RunRequest(APIModel):
         return self
 
 
+class ImprovementRunRequest(APIModel):
+    """A bounded request that binds learning to one persisted parent experiment."""
+
+    config_path: str = Field(
+        ...,
+        min_length=12,
+        max_length=160,
+        pattern=r"^config/[A-Za-z0-9_-]+\.ya?ml$",
+    )
+    experiment_id: str = Field(min_length=10, max_length=32, pattern=r"^EXP-[0-9]{6}$")
+    asset: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._^=-]+$")
+
+
 class ExecutionResponse(APIModel):
     workflow: Literal["experiment", "improvement", "validation"]
     status: Literal["completed", "disabled"]

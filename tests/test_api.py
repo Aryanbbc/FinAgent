@@ -105,6 +105,96 @@ def test_improvement_context_exposes_only_persisted_summary_fields(client: tuple
     assert payload["cycle_boundaries_persisted"] is False
 
 
+def test_protected_improvement_route_binds_the_explicit_parent_and_rejects_mismatches(
+    client: tuple[TestClient, str, str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api, experiment_id, _ = client
+    service = api.app.state.research_service
+    captured: dict[str, str] = {}
+
+    def controlled_run(config_path: str, *, experiment_id: str | None = None, asset: str | None = None) -> dict[str, object]:
+        captured.update({"config_path": config_path, "experiment_id": str(experiment_id), "asset": str(asset)})
+        return {
+            "workflow": "improvement", "status": "completed", "experiment_id": experiment_id,
+            "run_id": "CAND-0001", "validation_id": None,
+            "metadata": {"candidate_count": 1, "evaluated_count": 1, "rejected_count": 1, "promoted_version": None},
+        }
+
+    monkeypatch.setattr(service, "run_improvement", controlled_run)
+    payload = {"config_path": "config/improvement.yaml", "experiment_id": experiment_id, "asset": "EXAMPLE"}
+    response = api.post("/api/improvements/run", json=payload)
+    assert response.status_code == 200
+    assert response.json()["experiment_id"] == experiment_id
+    assert captured == {"config_path": "config/improvement.yaml", "experiment_id": experiment_id, "asset": "EXAMPLE"}
+
+    # The endpoint remains protected even though Vercel's server route can
+    # supply the credential; a browser never calls it directly with a key.
+    denied = api.post("/api/improvements/run", json=payload, headers={"X-FinAgent-Admin-Key": "incorrect"})
+    assert denied.status_code == 401
+
+    monkeypatch.undo()
+    mismatch = api.post("/api/improvements/run", json={**payload, "asset": "AAPL"})
+    assert mismatch.status_code == 400
+    missing = api.post("/api/improvements/run", json={**payload, "experiment_id": "EXP-999999"})
+    assert missing.status_code == 404
+
+
+def test_aapl_improvement_endpoint_persists_real_candidate_evidence(tmp_path: Path) -> None:
+    """Exercise the protected route with the same explicit AAPL parent Vercel supplies."""
+    database_path = tmp_path / "aapl.db"
+    data_path = tmp_path / "aapl.csv"
+    timestamps = pd.date_range("2021-01-04", periods=80, freq="B", tz="UTC")
+    close = pd.Series(range(80), dtype=float).mul(0.3).add(120.0)
+    pd.DataFrame({
+        "timestamp": timestamps, "open": close - 0.2, "high": close + 0.5,
+        "low": close - 0.5, "close": close, "volume": 1_000.0,
+    }).to_csv(data_path, index=False)
+
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    (config_root / "default.yaml").write_text(
+        (PROJECT_ROOT / "config" / "default.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    baseline = yaml.safe_load((PROJECT_ROOT / "config" / "experiments.yaml").read_text(encoding="utf-8"))
+    baseline["experiment"].update({"asset": "AAPL", "dataset": str(data_path)})
+    baseline["database_path"] = str(database_path)
+    baseline_path = config_root / "aapl_experiment.yaml"
+    baseline_path.write_text(yaml.safe_dump(baseline), encoding="utf-8")
+    experiment_id, _ = run_experiment(baseline_path, tmp_path)
+    (config_root / "aapl_improvement.yaml").write_text(
+        yaml.safe_dump({
+            # The endpoint supplies the persisted parent configuration; this
+            # path must never become an implicit fallback source.
+            "source_experiment_config": "config/experiments.yaml",
+            "learning": {
+                "enabled": True,
+                "search": {"mode": "neighborhood", "max_candidates": 1, "boundaries": {"momentum_window": {"values": [4]}}},
+                "walk_forward": {"train_size": 20, "test_size": 10, "step_size": 10, "min_windows": 2},
+                "promotion_gate": {"minimum_sharpe_improvement": 10.0, "minimum_window_pass_rate": 1.0, "minimum_trades": 1},
+            },
+        }),
+        encoding="utf-8",
+    )
+    settings = Settings(project_root=tmp_path, database_url=f"sqlite:///{database_path}", admin_api_key="api-test-key")
+    api = TestClient(create_app(settings), headers={"X-FinAgent-Admin-Key": "api-test-key"})
+
+    response = api.post(
+        "/api/improvements/run",
+        json={"config_path": "config/aapl_improvement.yaml", "experiment_id": experiment_id, "asset": "AAPL"},
+    )
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    assert payload["experiment_id"] == experiment_id
+    assert payload["metadata"]["candidate_count"] == payload["metadata"]["evaluated_count"] == 1
+    assert payload["metadata"]["rejected_count"] == 1
+    assert payload["metadata"]["promoted_version"] is None
+    service = api.app.state.research_service
+    decision = service.repository.get_candidate_evaluation(str(payload["run_id"]))
+    assert decision is not None and decision.status.value == "REJECTED"
+    assert service.repository.get_validation_windows(str(payload["run_id"]))
+
+
 def test_missing_artifacts_return_consistent_404(client: tuple[TestClient, str, str]) -> None:
     api, _, _ = client
     response = api.get("/api/experiments/EXP-999999")

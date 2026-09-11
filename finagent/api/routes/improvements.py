@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from finagent.api.dependencies import get_service
 from finagent.api.security import audit_admin_action, require_admin, require_mutation_rate_limit
-from finagent.api.schemas import ExecutionResponse, ImprovementContext, ImprovementDetail, ImprovementsResponse, PaginationMeta, RunRequest
+from finagent.api.schemas import ExecutionResponse, ImprovementContext, ImprovementDetail, ImprovementRunRequest, ImprovementsResponse, PaginationMeta
 from finagent.services.research_service import ResearchService
 
 router = APIRouter(prefix="/api/improvements", tags=["Self-Improvement"])
@@ -24,9 +24,9 @@ def improvement_context(service: ResearchService = Depends(get_service)) -> dict
     response_model=ExecutionResponse,
     dependencies=[Depends(require_admin), Depends(require_mutation_rate_limit)],
 )
-def run(request: RunRequest, http_request: Request, service: ResearchService = Depends(get_service)) -> dict[str, object]:
+def run(request: ImprovementRunRequest, http_request: Request, service: ResearchService = Depends(get_service)) -> dict[str, object]:
     audit_admin_action(http_request, "ADMIN_IMPROVEMENT_RUN")
-    return service.run_improvement(request.config_path)
+    return service.run_improvement(request.config_path, experiment_id=request.experiment_id, asset=request.asset)
 
 
 @router.get("/{run_id}", response_model=ImprovementDetail)

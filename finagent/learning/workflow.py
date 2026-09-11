@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from datetime import UTC, datetime
@@ -134,6 +135,8 @@ def run_improvement(
     project_root: str | Path,
     logger: logging.Logger | None = None,
     database_url: str | Path | None = None,
+    source_configuration: dict[str, Any] | None = None,
+    memory_experiment_id: str | None = None,
 ) -> ImprovementRunResult | None:
     """Generate, validate, gate, and record bounded V0.5 candidates when explicitly enabled."""
     root = Path(project_root)
@@ -149,15 +152,16 @@ def run_improvement(
         return None
 
     source_value = improvement_config.get("source_experiment_config", "config/experiments.yaml")
-    source_configuration = load_configuration(source_value, root)
+    has_explicit_parent_configuration = source_configuration is not None
+    source_configuration = copy.deepcopy(source_configuration) if has_explicit_parent_configuration else load_configuration(source_value, root)
     database_value = database_url or improvement_config.get("database_path", source_configuration.get("database_path", "data/finagent.db"))
     database = Database(database_value, root)
-    if database_url is not None:
+    if database_url is not None and not has_explicit_parent_configuration:
         source_configuration["database_path"] = str(database_url)
     repository = ExperimentRepository(database)
     source_asset, source_dataset = _source_identity(source_configuration)
 
-    memory_id = learning.get("memory_experiment_id")
+    memory_id = memory_experiment_id or learning.get("memory_experiment_id")
     memory = (
         repository.get_experiment_memory(str(memory_id))
         if memory_id

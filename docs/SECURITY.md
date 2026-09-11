@@ -31,10 +31,18 @@ Set `FINAGENT_ADMIN_API_KEY` only in the backend environment. The comparison is
 constant-time, the value is excluded from settings representations and logs,
 and missing/invalid keys receive a structured `401 ADMIN_AUTH_REQUIRED`.
 `FINAGENT_DISABLE_ADMIN_AUTH=true` is accepted only with
-`FINAGENT_ENV=development`; it is rejected in test and production. Do not put
-an admin key in Vercel, `NEXT_PUBLIC_*`, a browser request, a report, or a git
-commit. The deployed UI is intentionally read-only; use a local/server-side
-tool for administrative work, for example:
+`FINAGENT_ENV=development`; it is rejected in test and production.
+
+For the narrowly scoped historical experiment and AAPL improvement actions,
+Vercel may hold the matching key as the server-only
+`FINAGENT_SERVER_ADMIN_API_KEY`. The browser sends only the selected dataset
+or explicit AAPL experiment and asset to same-origin Next.js routes; those
+routes use the server-only key to attach the backend admin header. They reject
+missing secrets, arbitrary configuration paths, incompatible experiment/asset
+pairs, and legacy `EXAMPLE` records as AAPL parents. Do not put either key in
+`NEXT_PUBLIC_*`, browser requests, rendered HTML, reports, logs, or git.
+
+All other administrative operations remain server-side, for example:
 
 ```sh
 curl --fail-with-body \
@@ -93,10 +101,11 @@ behavior while blocking framing, plugins, unsafe bases, and arbitrary form
 destinations.
 
 Reports use `react-markdown` with raw HTML skipped; no component uses
-`dangerouslySetInnerHTML`. Only `NEXT_PUBLIC_*` values are browser-visible,
-and the frontend API URL is the sole public configuration variable. API errors
-are structured with a request ID; production errors do not reflect paths,
-database URLs, provider credentials, SQL, or stack traces.
+`dangerouslySetInnerHTML`. Only `NEXT_PUBLIC_*` values are browser-visible.
+`FINAGENT_API_URL` and `FINAGENT_SERVER_ADMIN_API_KEY` are Vercel server-only
+configuration values; the frontend API URL is the sole public configuration
+variable. API errors are structured with a request ID; production errors do
+not reflect paths, database URLs, provider credentials, SQL, or stack traces.
 
 The live monitor has a server-configured minimum 15-second poll interval,
 bounded symbol/buffer/retention settings, and no execution path.

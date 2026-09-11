@@ -10,10 +10,10 @@ export function resolveApiBase(configured: string | undefined, environment: stri
 
 const resolvedApiBase = resolveApiBase(process.env.NEXT_PUBLIC_FINAGENT_API_URL, process.env.NODE_ENV);
 export const apiBase = resolvedApiBase ?? "";
-// Browser bundles never receive the administrator key.  Hosted deployments
-// therefore remain intentionally read-only; administrators use the protected
-// backend API from a server-side/local tool with the header documented in
-// docs/SECURITY.md.
+// Browser bundles never receive the administrator key or call protected
+// FastAPI mutations directly. Narrow, same-origin Vercel bridges cover the
+// declared historical experiment and AAPL improvement workflows; all other
+// administration remains server-side/local as documented in SECURITY.md.
 export const publicMutationControlsEnabled = process.env.NODE_ENV !== "production";
 
 export type MetricMap = Record<string, number | null>;
@@ -55,6 +55,12 @@ export type ExperimentRunInput = {
   risk_max_volatility?: number; start_date?: string; end_date?: string;
 };
 export type HistoricalExperimentRun = { status: string; experiment_id: string; metadata: { trade_count?: number; dataset_id?: string } | null };
+export type HistoricalImprovementRun = {
+  status: "completed" | "disabled";
+  experiment_id: string;
+  run_id: string | null;
+  metadata: { candidate_count: number; evaluated_count: number; rejected_count: number; promoted_version: string | null };
+};
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public code = "REQUEST_FAILED", public details?: unknown, public requestId?: string) { super(message); }
@@ -112,6 +118,7 @@ export const api = {
   datasetOhlcv: (id: string, query = "") => request<OhlcvSeries>(`/api/data/datasets/${id}/ohlcv${query}`),
   fetchData: (input: DataFetchInput) => request<DataFetchResult>("/api/data/fetch", { method: "POST", body: JSON.stringify(input) }),
   runHistoricalExperiment: (dataset_id: string) => serverRequest<HistoricalExperimentRun>("/api/research/experiments/run", { method: "POST", body: JSON.stringify({ dataset_id }) }),
+  runImprovementCycle: (experiment_id: string, asset: string) => serverRequest<HistoricalImprovementRun>("/api/research/improvements/run", { method: "POST", body: JSON.stringify({ experiment_id, asset }) }),
   validateData: (dataset_id: string, missing_data_policy = "reject") => request<DatasetSummary>("/api/data/validate", { method: "POST", body: JSON.stringify({ dataset_id, missing_data_policy }) }),
   dataCollections: (query = "") => request<{ items: { collection_id: string; name: string; description: string | null; members: { dataset_id: string; version_id: string; symbol: string; adjustment_mode: string }[]; created_at: string | null; warnings: string[] }[]; pagination: Pagination }>(`/api/data/collections${query}`),
   liveStatus: () => request<{ enabled: boolean; provider: string; feed_mode: "polling"; poll_seconds: number; interval: "1min" | "5min" | "15min"; symbols: LiveFeedState[]; execution: "disabled" }>("/api/live/status"),
