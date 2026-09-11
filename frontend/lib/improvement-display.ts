@@ -39,10 +39,153 @@ export function metric(metrics: MetricMap, key: string): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-export function valueText(value: unknown): string {
+export type CandidateChangeRow = { label: string; previous: string; proposed: string };
+export type CandidateChangeGroup = { label: string; rows: CandidateChangeRow[] };
+
+type ParameterChange = { parameter?: unknown; previous_value?: unknown; proposed_value?: unknown };
+
+const parameterLabels: Record<string, string> = {
+  minimum_holding_period_bars: "Holding Period",
+  reentry_cooldown_bars: "Re-entry Cooldown",
+  maximum_position_size: "Max Position Size",
+  maximum_volatility: "Max Volatility",
+  risk_confidence_threshold: "Risk Confidence",
+  moving_average_fast_window: "Moving Average Fast Window",
+  moving_average_slow_window: "Moving Average Slow Window",
+  momentum_window: "Momentum Window",
+  mean_reversion_window: "Mean Reversion Window",
+  mean_reversion_threshold: "Mean Reversion Threshold",
+  momentum_entry_threshold: "Momentum Entry Threshold",
+  momentum_exit_threshold: "Momentum Exit Threshold",
+  strategy_weights: "Strategy Weights",
+  regime_strategy_mappings: "Regime Mapping",
+  execution_controls: "Execution Controls",
+};
+
+const riskParameters = new Set([
+  "maximum_position_size",
+  "maximum_volatility",
+  "risk_confidence_threshold",
+]);
+
+const strategyParameters = new Set([
+  "moving_average_fast_window",
+  "moving_average_slow_window",
+  "momentum_window",
+  "mean_reversion_window",
+  "mean_reversion_threshold",
+  "momentum_entry_threshold",
+  "momentum_exit_threshold",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (isRecord(left) && isRecord(right)) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return leftKeys.length === rightKeys.length && leftKeys.every((key) => key in right && sameValue(left[key], right[key]));
+  }
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((item, index) => sameValue(item, right[index]));
+  return false;
+}
+
+function compactNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
+}
+
+function leafLabel(parameter: string) {
+  return parameterLabels[parameter] ?? humanCode(parameter.replaceAll(".", "_"));
+}
+
+function groupLabel(parameter: string) {
+  if (parameter === "execution_controls") return "Execution Controls";
+  if (parameter === "strategy_weights") return "Strategy Weights";
+  if (parameter === "regime_strategy_mappings") return "Regime Mapping";
+  if (riskParameters.has(parameter)) return "Risk";
+  if (strategyParameters.has(parameter)) return "Strategy Parameters";
+  return "Other Changes";
+}
+
+function isPercentage(parameter: string, group?: string) {
+  return group === "strategy_weights" || ["maximum_position_size", "maximum_volatility"].includes(parameter);
+}
+
+function isBars(parameter: string) {
+  return parameter.endsWith("_window") || parameter.endsWith("_period_bars") || parameter.endsWith("_cooldown_bars");
+}
+
+function formattedValue(value: unknown, parameter: string, group?: string): string {
   if (value === null || value === undefined) return "—";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
+  if (typeof value === "boolean") return value ? "Enabled" : "Disabled";
+  if (typeof value === "number") {
+    if (isPercentage(parameter, group)) return `${compactNumber(value * 100)}%`;
+    return `${compactNumber(value)}${isBars(parameter) ? " bars" : ""}`;
+  }
+  if (typeof value === "string") return humanCode(value);
+  if (Array.isArray(value)) return value.map((item) => formattedValue(item, parameter, group)).join(", ");
+  // A supported parameter mapping is flattened before this formatter. This
+  // fallback avoids emitting serialized objects for unexpected legacy data.
+  return "Structured value";
+}
+
+function emptyValueDefault(group: string, parameter: string): unknown {
+  if (group === "execution_controls" && ["minimum_holding_period_bars", "reentry_cooldown_bars"].includes(parameter)) return 0;
+  if (group === "strategy_weights") return 0;
+  return undefined;
+}
+
+function flattenedRows(
+  group: string,
+  previous: unknown,
+  proposed: unknown,
+): CandidateChangeRow[] {
+  const before = isRecord(previous) ? previous : {};
+  const after = isRecord(proposed) ? proposed : {};
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return keys.flatMap((key) => {
+    const oldValue = key in before ? before[key] : emptyValueDefault(group, key);
+    const newValue = key in after ? after[key] : undefined;
+    if (isRecord(oldValue) || isRecord(newValue)) return flattenedRows(group, oldValue, newValue);
+    if (sameValue(oldValue, newValue)) return [];
+    return [{ label: leafLabel(key), previous: formattedValue(oldValue, key, group), proposed: formattedValue(newValue, key, group) }];
+  });
+}
+
+/** Convert persisted candidate deltas into compact, non-debug UI rows. */
+export function candidateChangeGroups(changes: ParameterChange[] | undefined): CandidateChangeGroup[] {
+  const groups: CandidateChangeGroup[] = [];
+  const byLabel = new Map<string, CandidateChangeGroup>();
+  for (const change of changes ?? []) {
+    const parameter = typeof change.parameter === "string" ? change.parameter : "unknown_parameter";
+    const previous = change.previous_value;
+    const proposed = change.proposed_value;
+    const structured = isRecord(previous) || isRecord(proposed);
+    const rows = structured
+      ? flattenedRows(parameter, previous, proposed)
+      : sameValue(previous, proposed)
+        ? []
+        : [{ label: leafLabel(parameter), previous: formattedValue(previous, parameter), proposed: formattedValue(proposed, parameter) }];
+    if (!rows.length) continue;
+    const label = groupLabel(parameter);
+    const existing = byLabel.get(label);
+    if (existing) existing.rows.push(...rows);
+    else {
+      const group = { label, rows };
+      groups.push(group);
+      byLabel.set(label, group);
+    }
+  }
+  return groups;
+}
+
+export function candidateChangeSummary(changes: ParameterChange[] | undefined): string {
+  return candidateChangeGroups(changes)
+    .flatMap((group) => group.rows.map((row) => `${group.label} · ${row.label}: ${row.previous} → ${row.proposed}`))
+    .join("; ");
 }
 
 function checkState(reasons: string[], failureCode: string): "pass" | "fail" | "unknown" {

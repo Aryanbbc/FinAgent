@@ -1,0 +1,12 @@
+.groups { display: grid; gap: 7px; min-width: 0; }
+.group { display: grid; gap: 3px; min-width: 0; }
+.group > strong { color: #9fb9cb; font: 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+.group p { display: flex; justify-content: space-between; gap: 8px; min-width: 0; margin: 0; }
+.group p span { overflow: hidden; color: #c4d4df; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.group p small { overflow: hidden; color: var(--muted); font: 9px var(--mono); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.empty { margin: 0; color: var(--muted); font-size: 10px; }
+.drawerGroups { padding: 9px; border: 1px solid var(--line); background: var(--surface-deep); }
+.drawerGroups .group p { padding-top: 2px; border-top: 1px solid rgba(39, 59, 78, .55); }
+.raw { margin-top: 10px; }
+.raw summary { cursor: pointer; color: var(--muted); font: 10px var(--mono); }
+.raw pre { max-height: 240px; overflow: auto; margin: 7px 0 0; color: #a8bdcc; font-size: 10px; }
