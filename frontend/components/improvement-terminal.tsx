@@ -6,6 +6,7 @@ import { api, type Critique, type ExperimentSummary, type Improvement, type Impr
 import { number, percent } from "@/lib/format";
 import { humanCode, metric, promotionChecks, reasonExplanation, valueText } from "@/lib/improvement-display";
 import { canRunImprovement, improvementContextUrl, improvementResultMessage, improvementRunReducer, improvementViewState, initialImprovementRunState } from "@/lib/improvement-execution";
+import pipeline from "./improvement-pipeline.module.css";
 
 type Props = { improvements: Improvement[]; versions: Version[]; context: ImprovementContext; selectedExperiment: ExperimentSummary | null; experiments: ExperimentSummary[] };
 
@@ -44,6 +45,23 @@ function GatePanel({ candidate, thresholdsPersisted }: { candidate: Improvement 
     <div className="terminal-panel-head"><div><span className="terminal-overline">Promotion gate · {candidate.run_id}</span><h2>Recorded promotion checks</h2></div><span className={`gate-decision ${tone(candidate.status)}`}>{candidateStatus(candidate)}</span></div>
     <div className="gate-grid">{promotionChecks(candidate).map((check) => <div className={`gate-check ${check.state}`} key={check.id}><span title={check.tooltip}>{check.label}</span><strong>{check.state === "pass" ? "PASS" : check.state === "fail" ? "FAIL" : "UNAVAILABLE"}</strong><small>{check.evidence}</small></div>)}</div>
     {!thresholdsPersisted && <p className="gate-note">Historic records preserve each gate outcome and reason code, but not the numeric policy thresholds used at run time.</p>}
+  </section>;
+}
+
+function PipelineFlow({ context, noPromotion }: { context: ImprovementContext; noPromotion: boolean }) {
+  const critique = context.parent_critique;
+  const findingCount = critique ? critique.strengths.length + critique.weaknesses.length + critique.failure_modes.length : null;
+  const outcome = context.candidates_promoted ? "Promoted" : noPromotion ? "Rejected" : "Awaiting evidence";
+  const stages = [
+    { number: "01", title: "Parent Version", detail: context.parent_version_id ?? "No persisted parent" },
+    { number: "02", title: "Critic", detail: findingCount === null ? "No persisted findings" : `${findingCount} findings` },
+    { number: "03", title: "Candidates", detail: `${context.candidates_generated} generated` },
+    { number: "04", title: "Walk-Forward", detail: `${context.candidates_evaluated} evaluated` },
+    { number: "05", title: "Promotion Gate", detail: "Strict evidence checks" },
+    { number: "06", title: "Outcome", detail: outcome, tone: context.candidates_promoted ? "promoted" : noPromotion ? "rejected" : "pending" },
+  ];
+  return <section className={pipeline.flow} aria-label="Controlled self-improvement pipeline">
+    {stages.map((stage) => <article className={`${pipeline.stage} ${stage.tone ? pipeline[stage.tone] : ""}`} key={stage.number}><span>{stage.number}</span><strong>{stage.title}</strong><small>{stage.detail}</small></article>)}
   </section>;
 }
 
@@ -121,7 +139,7 @@ export function ImprovementTerminal({ improvements, versions, context, selectedE
     </section>
     {noPromotion && <section className="no-promotion"><strong>NO CANDIDATE PROMOTED</strong><span>Every displayed candidate remains part of the research record; none met every deterministic promotion safeguard.</span></section>}
 
-    <section className="pipeline-flow" aria-label="Controlled self-improvement pipeline"><div><span>01</span><strong>{context.parent_version_id ?? "Parent unavailable"}</strong><small>Parent version</small></div><i>→</i><div><span>02</span><strong>Critic</strong><small>Persisted findings</small></div><i>→</i><div><span>03</span><strong>{context.candidates_generated}</strong><small>Bounded candidates</small></div><i>→</i><div><span>04</span><strong>{context.candidates_evaluated}</strong><small>Walk-forward evaluated</small></div><i>→</i><div><span>05</span><strong>Gate</strong><small>Strict evidence checks</small></div><i>→</i><div className={noPromotion ? "rejected" : "promoted"}><span>06</span><strong>{noPromotion ? "Rejected" : context.candidates_promoted ? "Promoted" : "Awaiting evidence"}</strong><small>Version outcome</small></div></section>
+    <PipelineFlow context={context} noPromotion={noPromotion}/>
 
     <CriticFindings critique={context.parent_critique}/>
 

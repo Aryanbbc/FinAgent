@@ -1,0 +1,51 @@
+.flow {
+  display: flex;
+  align-items: stretch;
+  gap: 30px;
+  overflow-x: auto;
+  padding: 1px;
+}
+
+.stage {
+  position: relative;
+  display: grid;
+  flex: 1 0 128px;
+  align-content: start;
+  gap: 4px;
+  min-height: 80px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--blue);
+  background: var(--surface);
+}
+
+.stage:not(:last-child)::after {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: calc(100% + 8px);
+  color: #668399;
+  content: "→";
+  font: 16px var(--mono);
+  transform: translateY(-50%);
+}
+
+.stage span { color: #668399; font: 9px var(--mono); }
+.stage strong { color: #d3e0ea; font-size: 12px; }
+.stage small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.rejected { border-top-color: var(--red); }
+.rejected small { color: var(--red); }
+.promoted { border-top-color: var(--green); }
+.promoted small { color: var(--green); }
+.pending { border-top-color: var(--amber); }
+
+@media (max-width: 900px) {
+  .flow { gap: 28px; }
+  .stage { flex-basis: 150px; }
+}
+
+@media (max-width: 560px) {
+  .flow { display: grid; grid-template-columns: 1fr; gap: 20px; overflow: visible; }
+  .stage { min-height: 68px; }
+  .stage:not(:last-child)::after { top: auto; bottom: -18px; left: 50%; content: "↓"; transform: translateX(-50%); }
+}
